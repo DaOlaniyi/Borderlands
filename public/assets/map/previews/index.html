@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Borderlands Terrain Assets — Pass 01</title>
+  <style>
+    :root { color: #f4e7c4; background: #081b24; font: 14px system-ui, sans-serif; }
+    body { margin: 0; padding: 28px; background: linear-gradient(#0b2f40,#071820); }
+    h1 { margin: 0 0 6px; font: 700 28px Georgia, serif; color: #efd9a1; }
+    p { margin: 0 0 24px; color: #aebfba; }
+    h2 { margin-top: 32px; font: 700 18px Georgia, serif; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(280px,1fr)); gap: 16px; }
+    figure { margin: 0; min-height: 220px; display: grid; place-items: center; position: relative; overflow: hidden; border: 1px solid #8a805f; border-radius: 8px; background-color: #8f9654; background-image: url('../terrain/meadow-01.png'); box-shadow: 0 8px 28px #0006; }
+    figure.water { background: #0b526c; background-image: linear-gradient(#ffffff08 1px,transparent 1px); background-size: 100% 13px; }
+    figure.texture { background-image: none; }
+    figure.texture img { width: 100%; height: 100%; object-fit: cover; image-rendering: auto; }
+    figure img { max-width: 90%; max-height: 190px; image-rendering: auto; }
+    figcaption { position: absolute; left: 8px; bottom: 8px; padding: 4px 7px; border-radius: 4px; background: #07151dcc; font-size: 11px; color: #e9ddbc; }
+    .scene { position: relative; height: 430px; overflow: hidden; border: 1px solid #8a805f; border-radius: 8px; background: #0b526c; }
+    .land { position: absolute; inset: 0 0 32%; background: url('../terrain/meadow-01.png'); }
+    .cliff { position: absolute; left: 4%; bottom: 20%; width: 92%; height: auto; }
+    .forest-large { position: absolute; left: 8%; top: 22px; width: 256px; }
+    .forest-medium { position: absolute; right: 9%; top: 92px; width: 160px; }
+    .tree { position: absolute; left: 47%; top: 80px; width: 48px; }
+  </style>
+</head>
+<body>
+  <h1>Borderlands Terrain Assets — Pass 01</h1>
+  <p>Vegetation, land textures, and coastal cliffs only. Runtime-sized PNGs shown over representative backgrounds.</p>
+  <h2>Composite preview</h2>
+  <section class="scene">
+    <div class="land"></div>
+    <img class="cliff" src="../coast/edge/cliff-edge-straight-01.png" alt="Narrow straight coastal cliff edge">
+    <img class="forest-large" src="../vegetation/forest-cluster-large-01.png" alt="Large forest cluster">
+    <img class="forest-medium" src="../vegetation/forest-cluster-medium-01.png" alt="Medium forest cluster">
+    <img class="tree" src="../vegetation/pine-single-01.png" alt="Single pine tree">
+  </section>
+  <h2>Vegetation</h2>
+  <section class="grid">
+    <figure><img src="../vegetation/pine-single-01.png" alt=""><figcaption>pine-single-01 · 48×72</figcaption></figure>
+    <figure><img src="../vegetation/pine-cluster-small-01.png" alt=""><figcaption>pine-cluster-small-01 · 96×72</figcaption></figure>
+    <figure><img src="../vegetation/forest-cluster-medium-01.png" alt=""><figcaption>forest-cluster-medium-01 · 160×106</figcaption></figure>
+    <figure><img src="../vegetation/forest-cluster-large-01.png" alt=""><figcaption>forest-cluster-large-01 · 256×170</figcaption></figure>
+  </section>
+  <h2>Land textures</h2>
+  <section class="grid">
+    <figure class="texture"><img src="../terrain/meadow-01.png" alt=""><figcaption>meadow-01 · 256×256</figcaption></figure>
+    <figure class="texture"><img src="../terrain/dry-grass-01.png" alt=""><figcaption>dry-grass-01 · 256×256</figcaption></figure>
+    <figure class="texture"><img src="../terrain/bare-earth-01.png" alt=""><figcaption>bare-earth-01 · 256×256</figcaption></figure>
+  </section>
+  <h2>Narrow coastline edge overlays</h2>
+  <section class="grid">
+    <figure class="water"><img src="../coast/edge/cliff-edge-straight-01.png" alt=""><figcaption>cliff-edge-straight-01 · 256×85</figcaption></figure>
+    <figure class="water"><img src="../coast/edge/cliff-edge-diagonal-up-01.png" alt=""><figcaption>cliff-edge-diagonal-up-01 · 256×85</figcaption></figure>
+    <figure class="water"><img src="../coast/edge/cliff-edge-diagonal-down-01.png" alt=""><figcaption>cliff-edge-diagonal-down-01 · 256×85</figcaption></figure>
+    <figure class="water"><img src="../coast/edge/cliff-edge-convex-01.png" alt=""><figcaption>cliff-edge-convex-01 · 192×96</figcaption></figure>
+    <figure class="water"><img src="../coast/edge/cliff-edge-concave-01.png" alt=""><figcaption>cliff-edge-concave-01 · 192×96</figcaption></figure>
+    <figure class="water"><img src="../coast/edge/cliff-edge-endcap-right-01.png" alt=""><figcaption>cliff-edge-endcap-right-01 · 160×80</figcaption></figure>
+  </section>
+  <h2>Standalone headlands and outcrops</h2>
+  <section class="grid">
+    <figure class="water"><img src="../coast/cliff-straight-01.png" alt=""><figcaption>cliff-straight-01 · 192×64</figcaption></figure>
+    <figure class="water"><img src="../coast/cliff-outer-corner-01.png" alt=""><figcaption>cliff-outer-corner-01 · 192×128</figcaption></figure>
+    <figure class="water"><img src="../coast/cliff-inlet-corner-01.png" alt=""><figcaption>cliff-inlet-corner-01 · 192×128</figcaption></figure>
+    <figure class="water"><img src="../coast/cliff-outcrop-01.png" alt=""><figcaption>cliff-outcrop-01 · 192×128</figcaption></figure>
+  </section>
+</body>
+</html>

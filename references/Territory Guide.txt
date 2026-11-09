@@ -1,0 +1,70 @@
+Overall visual direction
+
+Create a top-down strategy map with small colored soldier markers and larger town markers. Territory appears as continuous regions with lightly tinted interiors and clear, smooth outlines. Friendly sources share one region wherever their territory connects; hide boundaries between friendly sources. Enemy territory meets along a shared frontline. Borders should form sweeping curves, narrow corridors, salients, and isolated pockets as units move.
+
+Visual states to reproduce
+1. One town in open countryside.
+   A blue town sits in a large neutral landscape. Its territory expands outward in every available direction until reaching its maximum influence distance, forming a broad, roughly circular region. The edge represents the town’s maximum reach, rather than an arbitrary preset province.
+2. Two friendly towns merging.
+   Two blue towns stand close enough that their influence regions overlap. Their territory becomes one continuous shape with no internal dividing line. Its outline resembles two overlapping rounded regions. Moving the towns farther apart narrows the connection until neutral ground separates them.
+3. Opposing towns sharing a boundary.
+   A blue town and a red town face each other. Where both can project influence, ownership is determined by proximity or weighted proximity. The shared border lies approximately between them. Away from the opponent, each town’s territory continues outward until its own distance limit. This creates a relatively straight contested edge and rounded outer edges against neutral land.
+4. A continuous frontline formed by soldiers.
+   Two opposing chains of soldiers face each other. Each chain creates a continuous territorial region. The frontline follows the gap between the armies, bending around staggered positions. Individual soldiers contribute to the shape, but their friendly influence circles are not separately outlined.
+5. A soldier stretching territory outward.
+   A blue soldier advances beyond its town’s main region. While its influence still overlaps friendly territory, it creates a protruding lobe connected to home. The connection becomes narrower as the soldier moves away. Do not draw a guaranteed connector between the soldier and the town.
+6. A soldier breaking away into an isolated bubble.
+   The advancing soldier moves far enough that its territory stops touching the main region. The connecting neck closes, leaving neutral ground between them. The soldier retains a small blue territory bubble around itself. It remains blue, but is visibly disconnected and classified as stranded or unsupplied.
+7. Reconnection through a supporting soldier.
+   Another blue soldier moves into the gap between the isolated bubble and home territory. Its influence bridges the gap, reconnecting all three regions. Their internal outlines disappear, leaving one shared outer boundary. A chain of soldiers can similarly extend connected territory far beyond a town’s individual reach.
+8. An enemy pinching off a corridor.
+   A narrow blue corridor connects an advanced force to home. Red soldiers approach from opposite sides, pushing the blue boundary inward. Once red ownership cuts completely across the corridor, the advanced blue region becomes a separate pocket. The blue soldiers retain local territory wherever their influence still wins.
+9. A pocket reopening.
+   Blue reinforcements push against one side of an encircled pocket while its trapped units move toward them. Their territorial regions approach, touch, and merge. The enclosing red region opens into a passage. Supply returns only when a real territorial connection exists.
+10. Several factions meeting.
+    Blue, red, and gold forces approach the same area. Their regions meet without overlapping ownership or leaving accidental seams. Borders between opposing factions terminate at shared junctions. Friendly units behind the front do not create internal territorial lines.
+Suggested algorithmic choices
+
+Use a clipped, optionally weighted Voronoi field, evaluated on a regular map grid.
+
+Each town or soldier has:
+- A faction.
+- A position.
+- A maximum influence radius.
+- An optional influence weight.
+- A flag indicating whether it provides supply; towns usually do.
+For every grid sample:
+Find sources whose maximum reach includes this position.
+
+If no sources reach it:
+    Mark it neutral.
+
+Otherwise:
+    Choose the source with the best distance score.
+    Assign the position to that source’s faction.
+
+Only compare eligible sources. A distant source whose reach does not include a position must not block another source from claiming it.
+
+For the distance score, start with ordinary distance. Add weights later if towns or heavy units should push borders farther:
+\[
+\text{score}(x,i)=\|x-p_i\|-b_i
+\]
+The lowest score wins, provided the source is within its maximum reach. Here, \(b_i\) is a distance advantage, separate from the maximum radius.
+
+The important distinction: Voronoi competition determines who wins contested space. The influence radius determines where a source can claim space at all.
+
+Connectivity and stranded bubbles
+
+After calculating ownership, flood-fill friendly territory outward from supply towns. Friendly cells reached by that search are supplied; other friendly components are isolated pockets.
+
+A soldier does not need to be supplied to project its local influence. Otherwise its bubble would disappear immediately after disconnection, defeating the intended mechanic.
+
+For two unopposed sources, their circular regions overlap when their separation is less than the sum of their radii. Enemy competition can sever that overlap even while the sources remain physically close enough.
+
+Rendering and movement
+
+Use interpolated Marching Squares or another contour tracer to turn the ownership field into outlines. Apply modest smoothing while preserving narrow passages and holes. Rendering and supply calculations must agree about whether diagonal contacts count as connections.
+
+Recalculate territory from current source positions. Do not permanently retain all previously claimed cells in this version: an abandoned trail would keep a departing soldier connected to home. If you also want lasting conquest, store that as a separate ownership layer beneath the current influence and supply map.
+
+The key behavior to communicate is: connections emerge from actual territorial overlap; they are never automatically drawn between friendly sources.
