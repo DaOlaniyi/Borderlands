@@ -141,6 +141,6 @@ export function movePawns(g: Game, dt: number) {
     p.px = p.x; p.py = p.y
     const stand = (x: number, y: number) => g.canPawnStand(p, x, y)
     const moving = followRoute(p, dt, PAWN.speed, PAWN.accel, 36, 24, stand)
-    if (!moving && p.state !== 'chopping' && p.state !== 'building') p.route = p.route.length && p.routeIdx >= p.route.length / 2 ? [] : p.route
+    if (!moving && p.state !== 'chopping' && p.state !== 'building' && p.state !== 'hitting' && p.state !== 'mining') p.route = p.route.length && p.routeIdx >= p.route.length / 2 ? [] : p.route
   }
 }

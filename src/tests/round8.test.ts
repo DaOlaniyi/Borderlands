@@ -27,7 +27,7 @@ describe('existential threat', () => {
 describe('AI never freezes in a block pose forever', () => {
   it('a blocking unit is released by the watchdog even if the threat never leaves', () => {
     const g = makeGame({ rows, towns: [[1, 20, 20], [0, 100, 20]], units: [[1, 22, 20], [0, 26, 20]], ai: true, relation: 'war' })
-    for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false }
+    for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false, knight: false }
     const guard = g.units.find(u => u.faction === 1)!, foe = g.units.find(u => u.faction === 0)!
     foe.mode = 'block'; foe.hp = foe.maxHp
     stepN(g, 25 * (AI.maxBlockSeconds + AI.blockCooldown + 20))

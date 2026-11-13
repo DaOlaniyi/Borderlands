@@ -7,7 +7,7 @@ import { makeGame, openRows, stepN } from './helpers'
 
 const rows = openRows(130, 40)
 const noAttrition = <T,>(fn: () => T): T => { const a = TERRITORY.attritionPct; TERRITORY.attritionPct = 0; try { return fn() } finally { TERRITORY.attritionPct = a } }
-const quiet = (g: ReturnType<typeof makeGame>) => { for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false } }
+const quiet = (g: ReturnType<typeof makeGame>) => { for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false, knight: false } }
 // kingdom 0 = player; 1 and 2 will fight; 3 is near them; 4 is far away
 const world = () => makeGame({ rows, towns: [[0, 5, 5], [1, 10, 20], [2, 30, 20], [3, 45, 20], [4, 120, 35]], units: [], relation: 'neutral' })
 
@@ -36,7 +36,7 @@ describe('agitation', () => {
   it('raises the AI tower cap from 3 to 5 while on alert', () => {
     const run = (alert: boolean) => {
       const g = makeGame({ rows, towns: [[0, 5, 5], [1, 40, 20], [2, 60, 20]], units: [], relation: 'neutral', ai: true })
-      for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false }
+      for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false, knight: false }
       for (let i = 0; i < 25 * 600; i++) { g.step(1 / 25); g.kingdoms[1].lumber = 2000; if (alert) g.agit[1] = 45 }
       return g.towers.filter(t => t.faction === 1 && t.kind === 'tower').length
     }
@@ -67,7 +67,8 @@ describe('reactions, alliances and blocs', () => {
   it('an agitated nation with a smaller neighbour (and no tipping) attacks it, announcing a spillover', () => {
     const g = makeGame({ rows, towns: [[0, 5, 5], [1, 10, 20], [2, 30, 20], [2, 40, 24], [3, 60, 20], [3, 70, 24], [4, 110, 20], [4, 120, 24]], units: [], relation: 'neutral' })
     quiet(g)
-    g.kingdoms[2].aggression = 1; g.nextReact[2] = 0
+    g.kingdoms[2].aggression = 1; g.kingdoms[2].temperament = 'imperialist'; g.nextReact[2] = 0
+    for (let i = 0; i < 4; i++) g.spawnUnit(2, 30 * 64 + i * 40, 21 * 64) // (an imperialist needs some troops, not lots or towers)
     for (let i = 0; i < 25 * 900 && !g.diplomacy.hostile(2, 1) && !g.diplomacy.hostile(2, 3); i++) { g.step(1 / 25); g.agit[2] = 100; g.agit[1] = 0; g.agit[3] = 0 }
     const prey = [1, 3].find(o => g.diplomacy.hostile(2, o))
     expect(prey).toBeDefined()
@@ -133,8 +134,8 @@ describe('AI unit behaviour', () => {
   })
   it('AI favours warriors and lancers when producing troops', () => {
     const g = makeGame({ rows, towns: [[0, 5, 5], [1, 40, 20], [1, 50, 22], [1, 60, 20]], units: [], relation: 'neutral', ai: true })
-    const k = g.kingdoms[1]; k.power = 1e6; k.produce = { warrior: true, archer: true, lancer: true }
-    const counts = { warrior: 0, archer: 0, lancer: 0 }
+    const k = g.kingdoms[1]; k.power = 1e6; k.produce = { warrior: true, archer: true, lancer: true, knight: true }
+    const counts = { warrior: 0, archer: 0, lancer: 0, knight: 0 }
     for (let i = 0; i < 300; i++) { const u = g.tryProduce(k); if (u) { counts[u.type]++; g.killUnit(u); g.step(1 / 25) } }
     expect(counts.warrior + counts.lancer).toBeGreaterThan(counts.archer * 2)
     expect(counts.archer).toBeGreaterThan(0)
@@ -143,7 +144,7 @@ describe('AI unit behaviour', () => {
     noAttrition(() => {
       const g = makeGame({ rows, towns: [[0, 90, 20], [1, 20, 20]], units: [[1, 22, 20], [0, 26, 20], [0, 26, 21], [0, 27, 20]], relation: 'war', ai: true })
       quiet(g)
-      const hero = g.units[0]; hero.hp = hero.maxHp * 0.2
+      const hero = g.units[0]; hero.hp = hero.maxHp * 0.12
       for (const e of g.units.slice(1)) e.mode = 'block' // keep the attackers parked where they are
       g.time = 100; stepN(g, 25 * 8)
       expect(hero.aiRole).toBe('laststand'); expect(hero.mode).toBe('block')

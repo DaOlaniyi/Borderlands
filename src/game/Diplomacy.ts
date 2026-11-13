@@ -39,8 +39,15 @@ export class Diplomacy {
   incidents(a: number, b: number) { return this.kills[a][b] }
   casualties(victim: number, killer: number) { return this.lost[victim][killer] }
 
+  /** Truces (pair -> sim time they last until): while one holds, nothing may push the pair back into conflict or war. */
+  private truces = new Map<number, number>()
+  private tk = (a: number, b: number) => Math.min(a, b) * 64 + Math.max(a, b)
+  truceActive(a: number, b: number, time: number) { return (this.truces.get(this.tk(a, b)) ?? -1) > time }
+  setTruce(a: number, b: number, until: number) { this.truces.set(this.tk(a, b), until) }
+
   set(a: number, b: number, r: Relation, time: number, text?: string) {
     if (a === b || this.rel[a][b] === r) return
+    if ((r === 'conflict' || r === 'war' || r === 'total') && this.truceActive(a, b, time)) return // (a truce holds: no border incident or joined war reopens it)
     const prev = this.rel[a][b]
     this.rel[a][b] = this.rel[b][a] = r
     this.version++

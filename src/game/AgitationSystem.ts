@@ -1,4 +1,5 @@
-import { AGIT, AI, TILE } from './config'
+import { AGIT, AI, TEMPER, TILE } from './config'
+import { isSettlement } from './Economy'
 import type { Game } from './Game'
 import { landmassAt } from './WorldInfo'
 
@@ -89,20 +90,74 @@ export function updateAgitation(g: Game, dt: number) {
 export function agitationTick(g: Game) {
   reconcileAlliances(g)
   rallyAgainstThreat(g)
-  if (g.time < AGIT.earlyPeace) return // the region does not erupt into war in the opening minutes
   expandOverseas(g)
   const bal = balanceOfPower(g)
   for (const k of g.kingdoms) {
     if (k.isPlayer || !k.alive || g.time < (g.nextReact[k.id] ?? 0)) continue
     const id = k.id
-    if (g.agit[id] <= AGIT.reactAbove) continue
+    if (g.time < AGIT.earlyPeace && k.temperament !== 'imperialist') continue // the region does not erupt into war in the opening minutes (imperialists do not wait)
+    if (k.temperament === 'imperialist') { imperialTick(g, id); g.nextReact[id] = g.time + 30; continue }
+    const tp = TEMPER[k.temperament]
+    if (g.agit[id] <= tp.reactFrom && tp.unprovoked <= 0) continue
     if (g.diplomacy.bloc(id).length > 1) continue // blocs fight their founding war; they do not bully neighbours
     if (g.kingdoms.some(o => o.id !== id && o.alive && g.hostile(id, o.id))) continue // already busy fighting
-    const p = AGIT.reactBase + ((g.agit[id] - AGIT.reactAbove) / (100 - AGIT.reactAbove)) * AGIT.reactMax
+    const heat = Math.max(0, g.agit[id] - tp.reactFrom) / (100 - tp.reactFrom)
+    const p = (AGIT.reactBase + heat * AGIT.reactMax) * tp.reactMult + tp.unprovoked
     if (g.rng.next() >= p) continue
     g.nextReact[id] = g.time + AGIT.reactCooldown
     react(g, id, bal)
   }
+}
+
+/**
+ * Imperialists want territory above all and need no provocation. They do not wait for lots or towers, but they are not reckless either:
+ *   - when the balance of power turns against them they may still seek an alliance (and later betray an ally that is not bigger than they are),
+ *   - they watch wars between their neighbours and, after a while, pick the stronger side and strike the weaker one,
+ *   - otherwise they take on a land neighbour no bigger than themselves (the smallest first), then the settlements of a nation they do not
+ *     border (however large it is); the overseas rule handles smaller nations across the water.
+ * An army that sits idle is a reason to strike sooner, not later.
+ */
+/** Imperialists start acting after one minute. */
+export const IMPERIAL_START = 60
+export function imperialTick(g: Game, id: number) {
+  if (g.time < IMPERIAL_START) return
+  const bal = balanceOfPower(g)
+  const mine = g.ownedTowns(id)
+  // balance of power against us: cooperate (ally against the leader) like any other nation
+  if ((bal.tipped || bal.dominant) && bal.leader && !bal.leader.members.includes(id) && g.diplomacy.bloc(id).length < 2) { react(g, id, bal); return }
+  // betrayal: an ally that is no stronger than us becomes the next victim
+  for (const ally of g.diplomacy.alliesOf(id)) {
+    if (!g.kingdoms[ally].alive || strengthOf(g, ally) > mine || g.rng.next() > 0.2 || g.pop(id) < g.cap(id) * 0.5) continue
+    g.diplomacy.set(id, ally, 'neutral', g.time, `${g.label(id)} betrays ${g.label(ally)}`)
+    declareSpill(g, id, ally, 'war')
+    for (const k of g.kingdoms) if (!k.isPlayer && k.alive && k.id !== id) g.agit[k.id] = Math.min(100, g.agit[k.id] + 12)
+    return
+  }
+  const aiAlive = g.kingdoms.filter(o => !o.isPlayer && o.alive).length
+  const wars = g.kingdoms.filter(o => o.id !== id && o.alive && (g.diplomacy.get(id, o.id) === 'war' || g.diplomacy.get(id, o.id) === 'total')).length
+  if (wars >= 2 || aiWars(g) >= Math.max(1, Math.floor(aiAlive / AGIT.maxWarsDivisor)) + 2) return
+  const army = g.units.filter(u => u.faction === id && u.state !== 'dead' && u.inTower < 0)
+  const idle = army.filter(u => u.aiRole === '' && u.state === 'idle').length
+  const idleHeavy = army.length >= 6 && idle >= army.length * 0.6
+  if (mine < 1 || (!idleHeavy && g.pop(id) < g.cap(id) * 0.5)) return // some build-up first, unless a big army is already sitting about
+  if (wars >= 1 && !idleHeavy) return // one war at a time, unless the army is idle
+  const myLands = new Set(g.towns.filter(t => t.owner === id && !t.ruined && !isSettlement(t)).map(t => t.land))
+  const others = g.kingdoms.filter(o => o.id !== id && o.alive && g.ownedTowns(o.id) > 0 && g.diplomacy.get(id, o.id) === 'neutral')
+  const borders = (o: number) => g.towns.some(t => t.owner === o && !t.ruined && !isSettlement(t) && myLands.has(t.land))
+  // two neighbours fighting in front of us: after watching for a while, side with the stronger and strike the weaker
+  const near = (k: number) => g.towns.some(t => t.owner === k && !t.ruined && g.towns.some(m => m.owner === id && !m.ruined && tilesBetween(t, m) < 40))
+  const fighting: [number, number][] = []
+  for (const a of others) for (const b of others) if (a.id < b.id && g.diplomacy.hostile(a.id, b.id) && near(a.id) && near(b.id)) fighting.push([a.id, b.id])
+  const w = g.watch
+  if (fighting.length) {
+    const since = w.get(id) ?? g.time; w.set(id, since)
+    if (g.time - since > 90) { const [a, b] = fighting[0]; const weaker = strengthOf(g, a) <= strengthOf(g, b) ? a : b; w.delete(id); declareSpill(g, id, weaker, 'war'); return }
+  } else w.delete(id)
+  const neighbour = others.filter(o => borders(o.id) && strengthOf(g, o.id) <= mine).sort((a, b) => strengthOf(g, a.id) - strengthOf(g, b.id) || townDistance(g, id, a.id) - townDistance(g, id, b.id))[0]
+  if (neighbour) { declareSpill(g, id, neighbour.id, 'war'); return }
+  const rival = others.filter(o => !borders(o.id) && g.towns.some(t => t.owner === o.id && !t.ruined && isSettlement(t))) // far-off settlements: never a border to fear
+    .sort((a, b) => townDistance(g, id, a.id) - townDistance(g, id, b.id))[0]
+  if (rival) declareSpill(g, id, rival.id, 'war')
 }
 
 /**
@@ -115,7 +170,7 @@ function expandOverseas(g: Game) {
   if (aiWars(g) >= Math.max(1, Math.floor(aiAlive / AGIT.maxWarsDivisor))) return
   for (const k of g.kingdoms) {
     const id = k.id
-    if (k.isPlayer || !k.alive || g.time < (g.aiMemo.expandAt[id] ?? AI.expandAfter) || k.aggression < 0.25) continue
+    if (k.isPlayer || !k.alive || g.time < (g.aiMemo.expandAt[id] ?? AI.expandAfter) || k.aggression < 0.25 || k.temperament === 'pacifist') continue
     if (g.diplomacy.bloc(id).length > 1 || g.kingdoms.some(o => o.id !== id && o.alive && g.hostile(id, o.id))) continue
     const mine = g.towns.filter(t => t.owner === id && !t.ruined)
     if (!mine.length) continue
@@ -123,7 +178,7 @@ function expandOverseas(g: Game) {
     const sharesLand = (o: number) => g.towns.some(t => t.owner === o && !t.ruined && lands.has(landmassAt(g.world, t.x, t.y)))
     const others = g.kingdoms.filter(o => o.id !== id && o.alive && g.ownedTowns(o.id) > 0 && !g.diplomacy.allied(id, o.id))
     if (others.some(o => sharesLand(o.id))) continue // there is still someone to fight on foot
-    const prey = others.filter(o => townDistance(g, id, o.id) <= AI.expandTiles && strengthOf(g, o.id) <= Math.ceil(g.ownedTowns(id) * 1.3))
+    const prey = others.filter(o => townDistance(g, id, o.id) <= AI.expandTiles && strengthOf(g, o.id) <= (k.temperament === 'imperialist' ? g.ownedTowns(id) : Math.ceil(g.ownedTowns(id) * 1.3)))
       .sort((a, b) => townDistance(g, id, a.id) - townDistance(g, id, b.id) || strengthOf(g, a.id) - strengthOf(g, b.id))[0]
     g.aiMemo.expandAt[id] = g.time + AI.expandEvery
     if (prey && g.rng.next() < 0.25 + 0.5 * k.aggression) declareSpill(g, id, prey.id, 'war')
@@ -147,7 +202,9 @@ export function rallyAgainstThreat(g: Game) {
   const giant = leader.members.reduce((best, m) => (g.ownedTowns(m) > g.ownedTowns(best) ? m : best), leader.members[0])
   // 1. end the feuds among the rest
   for (let i = 0; i < rest.length; i++) for (let j = i + 1; j < rest.length; j++) {
-    if (g.diplomacy.hostile(rest[i], rest[j])) g.diplomacy.set(rest[i], rest[j], 'neutral', g.time, `${g.label(rest[i])} and ${g.label(rest[j])} lay down arms — ${g.label(giant)} is the greater threat`)
+    const fresh = !g.diplomacy.truceActive(rest[i], rest[j], g.time) // (the pair is under a truce for as long as the threat lasts: allies joining each other's wars may not reopen it, and it is announced once)
+    g.diplomacy.setTruce(rest[i], rest[j], g.time + 180)
+    if (g.diplomacy.hostile(rest[i], rest[j])) g.diplomacy.set(rest[i], rest[j], 'neutral', g.time, fresh ? `${g.label(rest[i])} and ${g.label(rest[j])} lay down arms — ${g.label(giant)} is the greater threat` : undefined)
   }
   // 2. one alliance against the giant (blocs that clash cannot merge)
   let anchor = rest[0]
@@ -175,8 +232,9 @@ function react(g: Game, k: number, bal: Balance) {
   const mine = g.ownedTowns(k)
   const others = g.kingdoms.filter(o => o.id !== k && o.alive && g.diplomacy.get(k, o.id) === 'neutral' && g.ownedTowns(o.id) > 0)
   // prey: a smaller or comparable neighbour — never a bigger one (unless it is the power everyone fears)
-  const prey = others.filter(o => strengthOf(g, o.id) <= mine && townDistance(g, k, o.id) <= AGIT.preyTiles).sort((a, b) => strengthOf(g, a.id) - strengthOf(g, b.id) || townDistance(g, k, a.id) - townDistance(g, k, b.id))[0]
-  const wantsPrey = prey && !bal.tipped && !bal.dominant && g.rng.next() < 0.4 + 0.6 * g.kingdoms[k].aggression
+  const tp = TEMPER[g.kingdoms[k].temperament]
+  const prey = others.filter(o => strengthOf(g, o.id) <= mine * tp.reach && townDistance(g, k, o.id) <= AGIT.preyTiles * Math.max(1, tp.reach)).sort((a, b) => strengthOf(g, a.id) - strengthOf(g, b.id) || townDistance(g, k, a.id) - townDistance(g, k, b.id))[0]
+  const wantsPrey = prey && !bal.tipped && !bal.dominant && g.rng.next() < tp.prey * (0.4 + 0.6 * g.kingdoms[k].aggression)
   if (wantsPrey) { declareSpill(g, k, prey.id, 'war'); return }
   // otherwise seek an alliance against the strongest nation
   const target = (bal.leader && !bal.leader.members.includes(k) && (bal.tipped || bal.dominant))
@@ -218,6 +276,7 @@ export function playerAllianceRequest(g: Game, k: number): boolean {
 export function declareSpill(g: Game, aggressor: number, victim: number, level: 'war' | 'conflict' = 'war') {
   if (g.diplomacy.get(aggressor, victim) === level || g.diplomacy.hostile(aggressor, victim)) return
   g.diplomacy.set(aggressor, victim, level, g.time)
+  if (g.diplomacy.get(aggressor, victim) !== level) return // (refused: a truce holds, so there is nothing to announce)
   g.spill(`SPILLOVER : ${g.label(aggressor).toUpperCase()} DECLARES ${level === 'war' ? 'WAR' : 'CONFLICT'} ON ${g.label(victim).toUpperCase()}`)
 }
 
@@ -241,7 +300,7 @@ export function reconcileAlliances(g: Game) {
     const r = g.diplomacy.get(a, b)
     if (r !== 'conflict' && r !== 'war' && r !== 'total') continue
     for (const c of g.diplomacy.alliesOf(a)) {
-      if (c === b || !g.kingdoms[c].alive || g.diplomacy.get(c, b) !== 'neutral') continue
+      if (c === b || !g.kingdoms[c].alive || g.diplomacy.get(c, b) !== 'neutral') continue // (no joining a war against somebody this nation has a truce with)
       declareSpill(g, c, b, r === 'conflict' ? 'conflict' : 'war')
     }
   }

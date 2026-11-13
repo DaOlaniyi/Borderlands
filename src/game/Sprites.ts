@@ -78,14 +78,14 @@ export function drawSheet(ctx: CanvasRenderingContext2D, sh: Sheet, fr: number, 
 }
 
 /** A whole-image recolour (buildings, ships): every pixel passing `isTeam` is tinted. */
-export function recolorImage(img: Img, spec: ColorDef, isTeam: (r: number, g: number, b: number) => boolean = isTeamPixel): HTMLCanvasElement {
+export function recolorImage(img: Img, spec: ColorDef, isTeam: (r: number, g: number, b: number) => boolean = isTeamPixel, squash?: { center: number; k: number }): HTMLCanvasElement {
   const c = document.createElement('canvas'); c.width = img.width; c.height = img.height
   const g = c.getContext('2d', { willReadFrequently: true })!
   g.drawImage(img, 0, 0)
   const data = g.getImageData(0, 0, c.width, c.height), d = data.data
   for (let i = 0; i < d.length; i += 4) {
     if (d[i + 3] < 8 || !isTeam(d[i], d[i + 1], d[i + 2])) continue
-    const [r, gg, b] = tintPixel(d[i], d[i + 1], d[i + 2], spec)
+    const [r, gg, b] = tintPixel(d[i], d[i + 1], d[i + 2], spec, squash)
     d[i] = r; d[i + 1] = gg; d[i + 2] = b
   }
   g.putImageData(data, 0, 0)

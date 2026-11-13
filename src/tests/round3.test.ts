@@ -165,7 +165,7 @@ describe('pawn harvest modes', () => {
 describe('AI building and bridging', () => {
   it('builds border towers, never more than five', () => {
     const g = makeGame({ rows: openRows(60, 30), towns: [[0, 10, 15], [1, 33, 15]], units: [], relation: 'neutral', ai: true })
-    g.kingdoms[1].lumber = 2000; g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }
+    g.kingdoms[1].lumber = 2000; g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }
     for (let i = 0; i < 25 * 400; i++) { g.step(1 / 25); g.kingdoms[1].lumber = Math.max(g.kingdoms[1].lumber, 500) }
     const n = g.towers.filter(t => t.faction === 1).length
     expect(n).toBeGreaterThanOrEqual(1); expect(n).toBeLessThanOrEqual(5)

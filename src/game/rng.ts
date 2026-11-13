@@ -5,7 +5,7 @@ export function hashSeed(seed: string | number): number {
   return h >>> 0
 }
 
-export type Rng = { next(): number; int(a: number, b: number): number; pick<T>(arr: T[]): T; chance(p: number): boolean }
+export type Rng = { state(): number; setState(s: number): void; next(): number; int(a: number, b: number): number; pick<T>(arr: T[]): T; chance(p: number): boolean }
 
 /** mulberry32 — small deterministic PRNG. */
 export function makeRng(seed: number): Rng {
@@ -18,6 +18,7 @@ export function makeRng(seed: number): Rng {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
   return {
+    state: () => a, setState: s => { a = s >>> 0 }, // (saved games keep the stream where it was)
     next,
     int: (lo, hi) => lo + Math.floor(next() * (hi - lo + 1)),
     pick: arr => arr[Math.floor(next() * arr.length)],

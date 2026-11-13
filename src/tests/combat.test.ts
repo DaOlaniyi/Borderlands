@@ -45,13 +45,16 @@ describe('contact combat', () => {
     expect(Math.abs(hits[1] - hits[0] - (W.attackDuration + W.cooldown))).toBeLessThan(0.1)
   })
 
-  it('blocking reduces incoming damage by 90%', () => {
+  it('blocking reduces incoming damage by 60% (lancers get no protection)', () => {
     const g = duel()
     const [a, b] = g.units
     damageUnit(g, a, 20)
     g.setBlock(b, true)
     damageUnit(g, b, 20)
-    expect(W.hp - a.hp).toBeCloseTo(20); expect(W.hp - b.hp).toBeCloseTo(2)
+    expect(W.hp - a.hp).toBeCloseTo(20); expect(W.hp - b.hp).toBeCloseTo(8)
+    const l = g.spawnUnit(0, 30 * 64, 20 * 64, 'lancer'); g.setBlock(l, true)
+    damageUnit(g, l, 20)
+    expect(UNIT.lancer.hp - l.hp).toBeCloseTo(20)                  // a blocking lancer takes full damage
   })
 
   it('blockers stop enemies but let friendly units pass; a blocker takes twice the space', () => {

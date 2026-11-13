@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { hashSeed } from '../game/rng'
 import { AI, DOCK, MAX_KINGDOMS, RESCUE, TILE, ZUMWALT, kingdomsForSeed } from '../game/config'
 import { EMBLEM_COUNT, assignEmblems } from '../game/Emblems'
 import { Game } from '../game/Game'
@@ -7,6 +8,7 @@ import { orderSail, sideToward, spawnBoat, undock } from '../game/BoatSystem'
 import { allocateKingdoms, generateArchipelago, generateWorld } from '../game/WorldGenerator'
 import { worldInfo } from '../game/WorldInfo'
 import { makeRng } from '../game/rng'
+import { landStock } from '../game/Economy'
 import { makeGame, stepN } from './helpers'
 
 // two islands (land '#') separated by 40 tiles of open sea; west island x 0..29, east island x 70..99
@@ -42,12 +44,18 @@ describe('palette and emblems', () => {
 })
 
 describe('archipelago', () => {
-  it('is a reproducible 200×200 world with 10–15 kingdoms derived from the seed', () => {
+  it('is a reproducible 300×300 world of 20 kingdoms; the seed\'s old 200×200 world (10–15 kingdoms) sits unchanged in its centre', () => {
     const a = generateArchipelago('ISLES'), b = generateArchipelago('ISLES')
-    expect(a.world.w).toBe(200); expect(a.world.h).toBe(200)
+    expect(a.world.w).toBe(300); expect(a.world.h).toBe(300)
     expect(Array.from(a.world.land)).toEqual(Array.from(b.world.land)); expect(a.spawns).toEqual(b.spawns)
-    const k = new Set(a.spawns.map(s => s.kingdom)).size
-    expect(k).toBeGreaterThanOrEqual(10); expect(k).toBeLessThanOrEqual(15)
+    expect(new Set(a.spawns.map(s => s.kingdom)).size).toBe(20)
+    const old = generateArchipelago('ISLES', 12)                               // an explicit small count is the pure old game
+    const base = kingdomsForSeed(hashSeed('ISLES'))
+    const inCore = (s: { cx: number; cy: number }) => s.cx >= 50 && s.cx < 250 && s.cy >= 50 && s.cy < 250
+    const oldK = a.spawns.filter(s => s.kingdom < base)
+    expect(oldK.length).toBeGreaterThan(0); expect(oldK.every(inCore)).toBe(true)
+    expect(a.spawns.filter(s => s.kingdom >= base).every(s => !inCore(s))).toBe(true)
+    void old
     for (let i = 0; i < 40; i++) expect(kingdomsForSeed(i * 7919)).toBeGreaterThanOrEqual(10)
   })
   it('has large land masses as big as the old 8-kingdom island, plenty of smaller islands and landlocked lakes only inland', () => {
@@ -157,43 +165,47 @@ describe('lumber stays with the town', () => {
     expect(t.stock).toBeCloseTo(40, 5)
     const p = g.pawns.find(q => q.town === t.id)!; p.carry = 10
     g.captureTown(t, 1)
-    expect(g.kingdoms[1].lumber).toBeCloseTo(l1 + 40 + 10, 5)        // the stock plus the load the pawn was carrying
+    void l1
+    expect(landStock(g, 1, t.land).lumber).toBeCloseTo(40 + 10, 5)   // the stock plus the load the pawn was carrying (a captured town on another island has its own pool)
     expect(t.stock).toBeCloseTo(50, 5)
     const t2 = g.towns[1]; g.depositLumber(t2, 30)
-    const before = g.kingdoms[0].lumber
+    const before = landStock(g, 0, t2.land).lumber
     g.destroyTown(t2, 0)
-    expect(g.kingdoms[0].lumber).toBeGreaterThan(before)             // loot from the razed town
+    expect(landStock(g, 0, t2.land).lumber).toBeGreaterThan(before) // loot from the razed town
   })
 })
 
 describe('Zumwalt gunnery', () => {
   const sea = () => makeGame({ rows, towns: [[0, 20, 20], [1, 80, 20]], units: [], relation: 'war' })
-  it('swings its cannon side toward the target and fires from the muzzles of the way it points', () => {
+  it('has guns on both flanks: it turns a quarter only when the target is off both, never flips upside down, and its cannons take turns', () => {
     expect(sideToward(5, 1)).toBe('E'); expect(sideToward(-5, 1)).toBe('W'); expect(sideToward(1, 5)).toBe('S'); expect(sideToward(1, -5)).toBe('N')
     const g = sea()
     const z = spawnBoat(g, 0, 'zumwalt', px(50), px(24)); sail(g, z, 50, 24)
-    const e = spawnBoat(g, 1, 'boat', px(50), px(14)); sail(g, e, 50, 14)      // an enemy ship due north
-    expect(z.side).toBe('E')
+    const e = spawnBoat(g, 1, 'boat', px(50), px(14)); sail(g, e, 50, 14)      // an enemy ship due north; the hull stands bow up, its guns facing east and west
+    expect(z.dir).toBe('up')
     stepN(g, 12)
     expect(g.shells.length).toBe(0)                                            // still turning: nothing fired yet
-    stepN(g, 25 * 4)
-    expect(z.side).toBe('N'); expect(z.flip).toBe(true)
+    stepN(g, 25 * 10) // one quarter turn, then 4 s of lock-on before the first volley
+    expect(['left', 'right']).toContain(z.dir); expect(z.flip).toBe(false)     // it now lies across: its guns face north and south. No upside-down flip
     const s = g.shells[0] ?? null
-    const fired = s ? s : null
-    if (fired) {
-      const off = Math.hypot(fired.x0 - z.x, fired.y0 - z.y)
-      expect(off).toBeGreaterThan(10)                                          // it leaves the muzzle, not the hull centre
-      expect(fired.y0).toBeLessThan(z.y)                                       // a north-facing broadside: the muzzles are on the north side
+    if (s) {
+      expect(Math.hypot(s.x0 - z.x, s.y0 - z.y)).toBeGreaterThan(10)          // it leaves the muzzle, not the hull centre
+      expect(s.y0).toBeLessThan(z.y)                                           // the north flank's muzzles
     }
     expect(e.hp).toBeLessThan(e.maxHp)
-    // a target to the east: the bow-up hull carries its cannons on its east side
+    // a target to the east of a hull standing bow down: its east flank already bears, so it fires at once without turning
     const g2 = sea()
     const z2 = spawnBoat(g2, 0, 'zumwalt', px(50), px(24)); sail(g2, z2, 50, 24)
-    z2.dir = 'down'; z2.side = 'W'
+    z2.dir = 'down'
     const e2 = spawnBoat(g2, 1, 'boat', px(60), px(24)); sail(g2, e2, 60, 24)
-    stepN(g2, 25 * 6)
-    expect(z2.side).toBe('E'); expect(z2.dir).toBe('up')
-    expect(ZUMWALT.muzzles.up[0][0]).toBeGreaterThan(0)
+    const origins: number[] = []
+    for (let i = 0; i < 25 * 14; i++) { g2.step(1 / 25); for (const sh of g2.shells) if (sh.src === z2.id && sh.t === 0) origins.push(Math.round(sh.y0 - z2.y)) }
+    expect(z2.dir).toBe('down')                                                // no turn
+    expect(e2.hp).toBeLessThan(e2.maxHp)
+    expect(origins.length).toBeGreaterThanOrEqual(4)
+    expect(origins.slice(0, 2)[0]).not.toBe(origins[1])                        // the two shots of a volley come from different cannons...
+    expect(new Set(origins).size).toBe(3)                                      // ...and the cannons take turns across all three
+    for (const k of ['up', 'down', 'left', 'right'] as const) for (const guns of Object.values(ZUMWALT.muzzles[k])) expect(guns!.length).toBe(3) // three to a flank
   })
   it('units shelled out of the blue pull back out of range, remember the ship, and rush back to stop it landing', () => {
     const g = makeGame({ rows, towns: [[0, 20, 20], [1, 80, 20]], units: [[1, 72, 20, 'warrior']], relation: 'war' })
@@ -216,8 +228,8 @@ describe('Zumwalt gunnery', () => {
 describe('AI expansion across the water', () => {
   it('a kingdom alone on its island eventually goes to war with a neighbour overseas', () => {
     const g = makeGame({ rows, towns: [[0, 20, 20], [1, 80, 20]], units: [], pawns: true, ai: true, relation: 'neutral' })
-    for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false }
-    g.kingdoms[1].aggression = 1
+    for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false, knight: false }
+    g.kingdoms[1].aggression = 1; g.kingdoms[1].temperament = 'neutral'
     g.time = AI.expandAfter + 100
     for (let i = 0; i < 25 * 600 && !g.diplomacy.hostile(0, 1); i++) g.step(1 / 25)
     expect(g.diplomacy.hostile(0, 1)).toBe(true)

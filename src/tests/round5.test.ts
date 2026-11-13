@@ -4,7 +4,7 @@ import { makeGame, openRows, stepN } from './helpers'
 
 const rows = openRows(80, 36)
 const noAttrition = <T,>(fn: () => T): T => { const a = TERRITORY.attritionPct; TERRITORY.attritionPct = 0; try { return fn() } finally { TERRITORY.attritionPct = a } }
-const noProd = (g: ReturnType<typeof makeGame>) => { for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false } }
+const noProd = (g: ReturnType<typeof makeGame>) => { for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false, knight: false } }
 
 describe('border violation warning and countdown', () => {
   const mk = () => makeGame({ rows, towns: [[0, 5, 5], [1, 40, 18]], units: [], relation: 'neutral' })

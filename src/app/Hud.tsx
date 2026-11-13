@@ -5,8 +5,9 @@ function useOpen(key: string): [boolean, () => void] {
   const [open, set] = useState(() => { try { return localStorage.getItem('bl-' + key) !== '0' } catch { return true } })
   return [open, () => set(o => { const n = !o; try { localStorage.setItem('bl-' + key, n ? '1' : '0') } catch { /* private mode */ } return n })]
 }
-import { BOAT, FACTION_COLORS, HARVEST, HARVEST_MODES, LOT, POP, TOWER, UNIT, UNIT_TYPES, ZUMWALT, ZUM_FOCUS, type BoatKind, type HarvestMode, type ZumFocus } from '../game/config'
+import { BARGE, BOAT, CARGO, GUNSHIP, MEAT, OUTPOST, SETTLE, YARD, TOWN_LEVEL, FACTION_COLORS, HARVEST, HARVEST_MODES, LOT, POP, TOWER, UNIT, UNIT_TYPES, ZUMWALT, ZUM_FOCUS, type BoatKind, type HarvestMode, type ZumFocus } from '../game/config'
 import type { HudSnapshot } from '../game/Game'
+import { ART_V } from '../game/artVersion'
 import type { Relation } from '../game/types'
 import { assetUrl, buildingUrl, emblemUrl, shipUrl, tintStyle, unitIcons } from './ui'
 
@@ -18,6 +19,18 @@ export type HudActions = {
   placeTower: () => void
   placeLot: () => void
   placeBoat: (kind: BoatKind) => void
+  placeSettlement: () => void
+  placeOutpost: () => void
+  placeYard: () => void
+  strike: () => void
+  clearStrikes: () => void
+  adjustWant: (kind: 'lumber' | 'gold' | 'meat', delta: number) => void
+  beginRoute: () => void
+  cancelRoute: () => void
+  clearRoute: () => void
+  upgradeTown: (id: number) => void
+  unloadCargo: (kind: 'lumber' | 'gold' | 'meat', amount: number) => void
+  abandonSettlement: (id: number) => void
   unloadBoat: () => void
   setZumFocus: (f: ZumFocus) => void
   breakAlliance: (k: number) => void
@@ -33,11 +46,18 @@ export type HudActions = {
   setSpeed: (n: number) => void
   setHarvest: (m: HarvestMode) => void
   exit: () => void
+  openSaves: () => void
+  openRamp: () => void
+  openDebug: () => void
 }
 
 const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
 const house = (color: number) => buildingUrl(color, 'House1')
 const icon = (n: string) => assetUrl(`UI Elements/UI Elements/Icons/${n}.png`)
+const goldIcon = `${import.meta.env.BASE_URL}assets/icons/gold.png?v=${ART_V}` // tight-cropped by scripts/make-icons.py
+const meatIcon = `${import.meta.env.BASE_URL}assets/icons/meat.png?v=${ART_V}`
+const propUrl = (n: string) => `${import.meta.env.BASE_URL}assets/props/${n}.png?v=${ART_V}`
+const BOAT_LABEL: Record<BoatKind, string> = { boat: 'Infantry boat', zumwalt: 'Zumwalt', cargo: 'Cargo boat', gunship: 'Gunship', barge: 'Barge' }
 const REL_LABEL: Record<Relation, string> = { allied: 'Allied', neutral: 'Neutral', conflict: 'In Conflict', war: 'At War', total: 'Total War' }
 
 function KingdomName({ hud, rename }: { hud: HudSnapshot; rename: (n: string) => void }) {
@@ -60,7 +80,7 @@ function KingdomRow({ k, actions, inBloc }: { k: KRow; actions: HudActions; inBl
       <img className="emb" src={emblemUrl(k.emblem, k.color, 24)} alt="" />
       <div className="kn" title="Click to show this nation's wars (red), conflicts (yellow) and alliances (green) on the map" onClick={() => actions.focusKingdom(k.id)}>
         <b>{k.isPlayer ? `${k.name} (you)` : k.name}{k.ready && <img className="alert" src={icon('Icon_05')} title="On alert: massing troops and building towers" alt="alert" />}</b>
-        <small>{k.title} · Lv {k.level} · {k.towns} towns · {k.units} units</small>
+        <small>{k.temperament && <em className={'temper ' + k.temperament} title="Temperament: how readily this nation starts wars">{k.temperament} · </em>}{k.title} · Lv {k.level} · {k.towns} towns · {k.units} units</small>
         <small className="tiles">{k.tiles.toLocaleString()} tiles</small>
         {a !== null && <div className="agit" title={`Agitation ${a}%`}><u className={a >= 40 ? 'hot' : a >= 35 ? 'warm' : ''} style={{ width: `${Math.min(100, a)}%` }} /></div>}
       </div>
@@ -93,7 +113,10 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
           <img className="crest" src={house(me.color)} style={tintStyle(me.color)} alt="" />
           <div><KingdomName hud={hud} rename={actions.rename} /><small>Level {hud.level} · {fmtTime(hud.time)} · seed {hud.seed}</small></div>
           <span className="stat" title="Towns"><img src={house(me.color)} style={tintStyle(me.color)} alt="" />{hud.towns}</span>
-          <span className="stat" title="Lumber"><img src={icon('Icon_02')} alt="" />{hud.lumber}</span>
+          <span className="stat" title={`Lumber (${hud.region === 'Home' ? 'home region' : 'this settlement'}: click a settlement or your home land to switch)`}><img src={icon('Icon_02')} alt="" />{hud.lumber}</span>
+          <span className="stat goldstat" title="Gold (this region)"><img src={goldIcon} alt="" />{hud.gold}</span>
+          <span className="stat" title={`Meat (this region). A settlement eats ${MEAT.eat} per ${MEAT.eatPeriod / 60} min and holds ${MEAT.store}.`}><img src={meatIcon} alt="" />{hud.meat}</span>
+          <span className="stat regiontag" title="Stockpile region shown">{hud.region}</span>
           <button className={'harvest ' + hud.harvest} title={`Pawn tree extraction: ${HARVEST[hud.harvest].label}${isFinite(HARVEST[hud.harvest].cap) ? ` (stops above ${HARVEST[hud.harvest].cap} lumber)` : ' (until no trees remain)'} — click to cycle`} onClick={() => actions.setHarvest(HARVEST_MODES[(HARVEST_MODES.indexOf(hud.harvest) + 1) % HARVEST_MODES.length])}>{HARVEST[hud.harvest].label}</button>
           <span className="stat" title="Power (1 per town per second)"><img src={icon('Icon_08')} alt="" />{hud.power}</span>
           <span className={'stat' + (hud.pop > hud.cap ? ' bad' : '')} title="Units / capacity (3 per town, 5 per barracks; archers in towers do not count)"><img src={icon('Icon_05')} alt="" />{hud.pop}/{hud.cap}</span>
@@ -136,7 +159,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
             {g.map(m => <KingdomRow key={m.id} k={m} actions={actions} inBloc />)}
           </div>
         ))}</div>}
-        <div className="speed">{[1, 2, 4].map(n => <button key={n} className={hud.speed === n ? 'on' : ''} onClick={() => actions.setSpeed(n)}>{n}×</button>)}<button onClick={actions.exit}>Menu</button></div>
+        <div className="speed">{[1, 2, 4].map(n => <button key={n} className={hud.speed === n ? 'on' : ''} onClick={() => actions.setSpeed(n)}>{n}×</button>)}<button title="Save the match, or load another (autosaves every 4 minutes)" onClick={actions.openSaves}>Save / Load</button><button title="Live analytics for every nation (Tab)" onClick={actions.openDebug}>War Room</button><button onClick={actions.exit}>Menu</button></div>
       </div>
       <div className="wars">
         {hud.conflicts.length > 0 && <div className="warshead"><b>Conflicts &amp; wars ({hud.conflicts.length})</b><button className="min" title={tabsOpen ? 'Minimise' : 'Expand'} onClick={toggleTabs}>{tabsOpen ? '–' : '+'}</button></div>}
@@ -164,11 +187,29 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
         <button className={'shopitem' + (hud.placing === 'lot' ? ' on' : '')} disabled={hud.lumber < LOT.cost && hud.placing !== 'lot'} onClick={actions.placeLot} title={`Lot: ${LOT.cost} lumber, a mini town (+1 troop capacity) tied to the nearest town. One per town.`}>
           <img src={buildingUrl(me.color, 'House3')} style={tintStyle(me.color)} alt="" /><span>{hud.placing === 'lot' ? 'Click land…' : 'Lot (+1 unit)'}</span><em><img src={icon('Icon_02')} alt="" />{LOT.cost}</em>
         </button>
+        <button className={'shopitem' + (hud.placing === 'yard' ? ' on' : '')} onClick={actions.placeYard} title={`Shipyard: free, one per landmass you hold a town on, plus one more for every four towns there. Build it on your coast beside a town; the white line along the shore (about 10 tiles) is where ships may be laid down. Each town (house) expands its capacity: one gunboat per town, two more or one Zumwalt per level 2 town (the yard hosts at most ${YARD.zumwaltsPerYard} Zumwalts). Infantry and cargo boats are not limited. Now: ${hud.navy.used}/${hud.navy.points} naval points, ${hud.navy.zum}/${hud.navy.zumCap} Zumwalts.`}>
+          <img src={propUrl('yard')} style={{ imageRendering: 'pixelated' }} alt="" /><span>{hud.placing === 'yard' ? 'Click coast…' : hud.navy.yards ? `Shipyard ✓ (${hud.navy.yards})` : 'Shipyard'}</span>
+        </button>
         <button className={'shopitem' + (hud.placing === 'boat' ? ' on' : '')} disabled={hud.lumber < BOAT.cost && hud.placing !== 'boat'} onClick={() => actions.placeBoat('boat')} title={`Infantry boat: ${BOAT.cost} lumber, built by a pawn in the water beside your coast. Carries ${BOAT.cap} units (they leave your troop count while aboard). Half a warrior's HP, no weapons.`}>
-          <img src={shipUrl('boat', me.color)} alt="" /><span>{hud.placing === 'boat' ? 'Click water…' : 'Boat'}</span><em><img src={icon('Icon_02')} alt="" />{BOAT.cost}</em>
+          <img className="shipicon" src={shipUrl('boat', me.color, 'right')} alt="" /><span>{hud.placing === 'boat' ? 'Click water…' : 'Boat'}</span><em><img src={icon('Icon_02')} alt="" />{BOAT.cost}</em>
+        </button>
+        <button className={'shopitem' + (hud.placing === 'barge' ? ' on' : '')} disabled={hud.lumber < BARGE.cost && hud.placing !== 'barge'} onClick={() => actions.placeBoat('barge')} title={`Barge: ${BARGE.cost} lumber, the landing craft. Carries ${BARGE.cap} units. It moors in ${BARGE.dockTime} s and nothing stops it: fire does not interrupt the mooring and enemy troops on the beach cannot keep it off; on touching down it throws every enemy within ${BARGE.shoveTiles} tiles back. Land units do only ${Math.round(BARGE.landDamage * 100)}% damage to it, ships full damage. Press F when docked to lower the ramp (units walk off, and can board).`}>
+          <img className="shipicon" src={shipUrl('barge', me.color, 'right')} alt="" /><span>{hud.placing === 'barge' ? 'Click water…' : 'Barge'}</span><em><img src={icon('Icon_02')} alt="" />{BARGE.cost}</em>
         </button>
         <button className={'shopitem' + (hud.placing === 'zumwalt' ? ' on' : '')} disabled={hud.lumber < ZUMWALT.cost && hud.placing !== 'zumwalt'} onClick={() => actions.placeBoat('zumwalt')} title={`Zumwalt: ${ZUMWALT.cost} lumber. Cannons reach ${ZUMWALT.rangeTiles} tiles (bursts of two, 2.5× a warrior's damage up close, 10% at maximum range). Carries ${ZUMWALT.cap}. Fragile: an archer's HP.`}>
-          <img src={shipUrl('zumwalt', me.color)} alt="" /><span>{hud.placing === 'zumwalt' ? 'Click water…' : 'Zumwalt'}</span><em><img src={icon('Icon_02')} alt="" />{ZUMWALT.cost}</em>
+          <img className="shipicon" src={shipUrl('zumwalt', me.color, 'right')} alt="" /><span>{hud.placing === 'zumwalt' ? 'Click water…' : 'Zumwalt'}</span><em><img src={icon('Icon_02')} alt="" />{ZUMWALT.cost}</em>
+        </button>
+        <button className={'shopitem' + (hud.placing === 'cargo' ? ' on' : '')} disabled={hud.lumber < CARGO.cost && hud.placing !== 'cargo'} onClick={() => actions.placeBoat('cargo')} title={`Cargo boat: ${CARGO.cost} lumber. Carries up to ${CARGO.cap.lumber} lumber, ${CARGO.cap.gold} gold and ${CARGO.cap.meat} meat between regions. Sunk by two Zumwalt volleys; its cargo floats until someone scoops it up.`}>
+          <img className="shipicon" src={shipUrl('cargo', me.color, 'right')} alt="" /><span>{hud.placing === 'cargo' ? 'Click water…' : 'Cargo boat'}</span><em><img src={icon('Icon_02')} alt="" />{CARGO.cost}</em>
+        </button>
+        <button className={'shopitem' + (hud.placing === 'gunship' ? ' on' : '')} disabled={hud.lumber < GUNSHIP.cost && hud.placing !== 'gunship'} onClick={() => actions.placeBoat('gunship')} title={`Gunship: ${GUNSHIP.cost} lumber. A pirate vessel: ${GUNSHIP.rangeTiles}-tile guns against ships only, 10% slower than a cargo boat. Scoops floating cargo but cannot load at ports.`}>
+          <img className="shipicon" src={shipUrl('gunship', me.color, 'right')} alt="" /><span>{hud.placing === 'gunship' ? 'Click water…' : 'Gunship'}</span><em><img src={icon('Icon_02')} alt="" />{GUNSHIP.cost}</em>
+        </button>
+        <button className={'shopitem' + (hud.placing === 'outpost' ? ' on' : '')} disabled={hud.power < OUTPOST.cost && hud.placing !== 'outpost'} onClick={actions.placeOutpost} title={`Outpost: ${OUTPOST.cost} power, instant, 1 hp. A stake that gives your troops a supplied buffer around it (half-strength territory, combat only: pawns cannot use it) so an army can follow a trail into new land without being cut off. Any enemy land unit destroys it with one strike; archer towers cannot shoot it. Plant it within a few tiles of your own ground.`}>
+          <svg width="30" height="40" viewBox="0 0 30 40" aria-hidden="true"><rect x="12" y="2" width="3" height="36" fill="#6b4a2b" /><path d="M15 3 L28 9 L15 15 Z" fill={FACTION_COLORS[me.color]} stroke="#1a1f26" strokeWidth="1.5" /></svg><span>{hud.placing === 'outpost' ? 'Click land…' : 'Outpost'}</span><em><img src={icon('Icon_08')} alt="" />{OUTPOST.cost}</em>
+        </button>
+        <button className={'shopitem' + (hud.placing === 'settlement' ? ' on' : '')} onClick={actions.placeSettlement} title={`Settlement: ${SETTLE.cost} lumber from your home stock. Plant it on or beside your territory on a landmass you do not hold yet: land troops from an infantry boat and moor a cargo boat there first. It needs a troop beside it and ${MEAT.eat} meat per ${MEAT.eatPeriod / 60} minutes, or it collapses in ${SETTLE.decaySeconds / 60} minutes. It can never be captured, only destroyed.`}>
+          <img src={propUrl('pillar')} style={{ imageRendering: 'pixelated' }} alt="" /><span>{hud.placing === 'settlement' ? 'Click land…' : 'Settlement'}</span><em><img src={icon('Icon_02')} alt="" />{SETTLE.cost}</em>
         </button>
         </>}
       </div>
@@ -176,19 +217,51 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
       {hud.boat && (
         <div className="panel hud-sel">
           <div className="selinfo">
-            <b>{hud.boat.kind === 'zumwalt' ? 'Zumwalt' : 'Infantry boat'}{hud.boat.count > 1 ? ` ×${hud.boat.count}` : ''}</b>
-            <span>{hud.boat.docked ? 'Docked — friendly territory around it' : hud.boat.blocked ? 'Landing blocked — enemy troops hold the beach' : hud.boat.docking >= 0 ? `Docking… ${Math.ceil((1 - hud.boat.docking) * 5)} s (fire interrupts it)` : 'At sea'}{hud.boat.kind === 'zumwalt' && hud.boat.docked ? ' · cannons offline' : ''}</span>
+            <b>{hud.boat.mine ? '' : `${hud.boat.owner}'s `}{BOAT_LABEL[hud.boat.kind]}{hud.boat.count > 1 ? ` ×${hud.boat.count}` : ''}</b>
+            <span>{hud.boat.docked ? 'Docked — friendly territory around it' : hud.boat.blocked ? 'Landing blocked — enemy troops hold the beach' : hud.boat.docking >= 0 ? (hud.boat.kind === 'barge' ? `Docking… ${Math.ceil((1 - hud.boat.docking) * BARGE.dockTime)} s (nothing stops it)` : `Docking… ${Math.ceil((1 - hud.boat.docking) * 5)} s (fire interrupts it)`) : 'At sea'}{hud.boat.kind === 'barge' && hud.boat.docked ? (hud.boat.open ? ' · ramp DOWN' : ' · ramp up') : ''}{hud.boat.kind === 'zumwalt' && hud.boat.docked ? ' · cannons offline' : ''}</span>
             <div className="hpbar"><i style={{ width: `${Math.max(0, (hud.boat.hp / hud.boat.maxHp) * 100)}%` }} /></div>
-            <span>HP {hud.boat.hp} / {hud.boat.maxHp} · Aboard {hud.boat.cargo}/{hud.boat.cap}</span>
+            <span>HP {hud.boat.hp} / {hud.boat.maxHp}{hud.boat.cap > 0 ? ` · Aboard ${hud.boat.cargo}/${hud.boat.cap}${hud.boat.cargo >= hud.boat.cap ? ' (FULL)' : ''}` : ''}</span>
+            {!hud.boat.mine && hud.boat.kind === 'cargo' && <span>Hold: {Math.round(hud.boat.load.lumber)} lumber · {Math.round(hud.boat.load.gold)} gold · {Math.round(hud.boat.load.meat)} meat</span>}
             {hud.boat.names.length > 0 && <small>{hud.boat.names.slice(0, 6).join(', ')}{hud.boat.names.length > 6 ? '…' : ''}</small>}
-            <small>Drag from the ship to sail it · end the route beside land to dock · drag troops onto a docked ship to board</small>
+            {hud.boat.mine && <small>Drag from the ship to sail it · end the route beside land to dock · {hud.boat.kind === 'barge' ? 'press F to lower the ramp, then drag troops aboard' : 'drag troops onto a docked ship to board'}</small>}
+          </div>
+          {hud.boat.mine && <div className="selbtns">
+            {hud.boat.kind === 'barge'
+              ? <button className={'tsbtn small' + (hud.boat.open ? ' on' : '')} disabled={!hud.boat.docked} title={hud.boat.docked ? 'Lower the ramp: everyone aboard walks off (and troops can board). Press again to raise it. Hotkey F' : 'The barge must be docked at a shore'} onClick={actions.openRamp}>{hud.boat.open ? 'Raise ramp (F)' : 'Open ramp (F)'}</button>
+              : <button className="tsbtn small" disabled={!hud.boat.docked || hud.boat.cargo === 0} title={hud.boat.docked ? 'Land every unit aboard' : 'The ship must be docked at a coast'} onClick={actions.unloadBoat}>Unload</button>}
+          </div>}
+        </div>
+      )}
+      {hud.boat && hud.boat.mine && hud.boat.kind === 'cargo' && (
+        <div className="panel hud-sel cargomenu">
+          <div className="selinfo">
+            <b>Cargo hold{hud.boat.pct >= 0 ? ` · ${hud.boat.pct}% loaded` : ''}</b>
+            {(['lumber', 'gold', 'meat'] as const).map(k => (
+              <div key={k} className="cargorow">
+                <img src={k === 'lumber' ? icon('Icon_02') : k === 'gold' ? goldIcon : meatIcon} alt="" /><span>{k}</span>
+                <button className="tsbtn small" onClick={() => actions.adjustWant(k, -(k === 'lumber' ? 20 : k === 'gold' ? 2 : 5))}>−</button>
+                <em>{Math.round(hud.boat!.load[k])} / {Math.round(hud.boat!.want[k])}</em>
+                <button className="tsbtn small" onClick={() => actions.adjustWant(k, k === 'lumber' ? 20 : k === 'gold' ? 2 : 5)}>+</button>
+                <button className="tsbtn small" disabled={!hud.boat!.docked || hud.boat!.load[k] - hud.boat!.unload[k] < 0.5} title={`Pawns put ${k === 'lumber' ? 20 : k === 'gold' ? 2 : 5} ${k} ashore (only that much)`} onClick={() => actions.unloadCargo(k, k === 'lumber' ? 20 : k === 'gold' ? 2 : 5)}>Unload{hud.boat!.unload[k] > 0 ? ` (${Math.round(hud.boat!.unload[k])})` : ''}</button>
+              </div>
+            ))}
+            <small>Moor beside a town or settlement: its pawns load up to the first number and unload down to it. Load / want shown per resource.</small>
+            {hud.boat.trade && <small>Trade route: {hud.boat.trade.a} → {hud.boat.trade.b} ({hud.boat.trade.leg}); repeats until cleared.</small>}
+            {hud.boat.picking && <small><b>Pick the {hud.boat.picking === 'a' ? 'loading' : 'unloading'} town or settlement on the map…</b></small>}
           </div>
           <div className="selbtns">
-            <button className="tsbtn small" disabled={!hud.boat.docked || hud.boat.cargo === 0} title={hud.boat.docked ? 'Land every unit aboard' : 'The ship must be docked at a coast'} onClick={actions.unloadBoat}>Unload</button>
+            <button className={'tsbtn small' + (hud.boat.picking ? ' on' : '')} title="Set a standing route: load the amounts above at one port, deliver them to the other, repeat" onClick={hud.boat.picking ? actions.cancelRoute : actions.beginRoute}>{hud.boat.picking ? 'Cancel' : 'Set route'}</button>
+            {hud.boat.trade && <button className="tsbtn small red" onClick={actions.clearRoute}>Clear route</button>}
           </div>
         </div>
       )}
-      {hud.boat && hud.boat.zumwalts > 0 && (
+      {hud.boat && hud.boat.mine && hud.boat.armed && (
+        <div className="zumfocus" title="Place a target X: red when in range, grey when out of range. A new target takes 4 s to lock on (Zumwalts).">
+          <button className={'tsbtn small' + (hud.boat.striking ? ' on' : '')} onClick={actions.strike}>{hud.boat.striking ? 'Click a target…' : 'Strike'}</button>
+          {hud.boat.hasStrike && <button className="tsbtn small red" onClick={actions.clearStrikes}>Clear target</button>}
+        </div>
+      )}
+      {hud.boat && hud.boat.mine && hud.boat.zumwalts > 0 && (
         <div className="zumfocus" title="What the selected Zumwalt(s) shoot at first">
           <span>Target</span>
           {ZUM_FOCUS.map(f => <button key={f} className={'tsbtn small' + (hud.boat!.focus === f ? ' on' : '')} onClick={() => actions.setZumFocus(f)}>{f === 'ships' ? 'Ships' : f === 'buildings' ? 'Buildings' : 'Troops'}</button>)}
@@ -222,16 +295,25 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
       {hud.town && (
         <div className="panel hud-sel">
           <div className="selinfo">
-            <b>{hud.town.mine ? 'Your' : `${hud.town.owner}'s`} {hud.town.kind === 'barracks' ? 'barracks' : 'town'}</b>
+            <b>{hud.town.mine ? 'Your' : `${hud.town.owner}'s`} {hud.town.kind === 'barracks' ? 'barracks' : hud.town.kind === 'settlement' ? 'settlement' : 'town'} · level {hud.town.level}</b>
             <div className="hpbar"><i style={{ width: `${Math.max(0, (hud.town.hp / hud.town.maxHp) * 100)}%` }} /></div>
             <span>HP {hud.town.hp} / {hud.town.maxHp}</span>
-            {!hud.town.mine && <small>CAPTURE: take it intact when it is undefended · RAZE: destroy it to deny the enemy. Click the town again to switch.</small>}
+            {hud.town.store && <span title={hud.town.shared ? 'Towns on one island share a stockpile' : "This settlement's own stockpile"}>{hud.town.shared ? 'Island stockpile' : 'Stock'}: {Math.floor(hud.town.store.lumber)} lumber · {Math.floor(hud.town.store.gold)} gold · {hud.town.store.meat.toFixed(1)}/{hud.town.meatCap} meat</span>}
+            {hud.town.kind === 'settlement' && hud.town.store && <>
+              <span>Troops here {hud.town.troops} (needs 1) · holds {hud.town.cap} units</span>
+              {hud.town.decay > 0 && hud.town.decay < SETTLE.decaySeconds && <span className="warn">Collapsing in {hud.town.decay}s — bring meat (cargo boat) and keep a troop beside it</span>}
+              {hud.town.level < 2 && <small>Level 1: a small territory, no archer towers, no harvesting. Level 2: crates, towers, 3 pawns. Level 3: 5 pawns, 10 units and ships can be built beside it.</small>}
+              {hud.town.mine && <button className="tsbtn small red" title="Give the settlement up: the first unit of any kingdom to reach it claims it" onClick={() => actions.abandonSettlement(hud.town!.id)}>Abandon</button>}
+            </>}
+            {!hud.town.mine && hud.town.kind !== 'settlement' && <small>CAPTURE: take it intact when it is undefended · RAZE: destroy it to deny the enemy. Click the town again to switch.</small>}
+            {!hud.town.mine && hud.town.kind === 'settlement' && <small>Troops standing on an undefended settlement take it over, stores and all. A Zumwalt can destroy it (it resists ship fire by half).</small>}
             {hud.town.mine && <small>Turn production off to stop new troops spawning here.</small>}
           </div>
           <div className="selbtns">
+            {hud.town.mine && hud.town.upgrade && <button className="tsbtn small" disabled={!!hud.town.upgrade.error} title={hud.town.upgrade.error ?? hud.town.upgrade.label} onClick={() => actions.upgradeTown(hud.town!.id)}>{hud.town.upgrade.label}</button>}
             {hud.town.mine
               ? <button className={'tsbtn small' + (hud.town.produce ? ' on' : '')} onClick={() => actions.toggleTownProduce(hud.town!.id)}>{hud.town.produce ? 'Producing troops' : 'Production off'}</button>
-              : <button className={'tsbtn small' + (hud.town.raze ? ' red' : ' on')} onClick={() => actions.toggleTownRaze(hud.town!.id)}>{hud.town.raze ? 'Objective: RAZE' : 'Objective: CAPTURE'}</button>}
+              : hud.town.kind === 'settlement' ? null : <button className={'tsbtn small' + (hud.town.raze ? ' red' : ' on')} onClick={() => actions.toggleTownRaze(hud.town!.id)}>{hud.town.raze ? 'Objective: RAZE' : 'Objective: CAPTURE'}</button>}
           </div>
         </div>
       )}
@@ -243,7 +325,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
       )}
       {hud.pawn && (
         <div className="panel hud-sel">
-          <div className="selinfo"><b>Pawn</b><span>{hud.pawn.state}</span>{hud.pawn.carry > 0 && <span>Carrying {hud.pawn.carry} lumber</span>}{hud.pawn.progress > 0 && <span>Chopping {Math.round(hud.pawn.progress * 100)}%</span>}<small>Click a tree to send the pawn</small></div>
+          <div className="selinfo"><b>Pawn</b><span>{hud.pawn.state}</span>{hud.pawn.carry > 0 && <span>Carrying {hud.pawn.carry}</span>}{hud.pawn.progress > 0 && <span>Chopping {Math.round(hud.pawn.progress * 100)}%</span>}<small>Click a tree, gold stone, ripe sheep or docked cargo boat to send the pawn (it drops what it was doing at once)</small></div>
         </div>
       )}
       <div className="hint help">Drag a unit to draw a route · shift-click or C-brush to select several · S stops movement · drag empty ground to pan · scroll to zoom · B toggles block</div>

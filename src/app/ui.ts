@@ -33,7 +33,13 @@ function frameIcon(sheet: { img: CanvasImageSource & { width: number; height: nu
   return out.toDataURL()
 }
 
-let uiAssets: Assets | null = null
+/**
+ * UI state shared by the HUD (loaded sprites, unit icons). It lives on `globalThis`, not in module variables: when Vite hot-reloads this file
+ * the module is re-evaluated, and module-level state would silently reset to empty (blank shop and production icons until a full refresh).
+ */
+type UiState = { assets: Assets | null; unitIcons: Partial<Record<UnitType, string>> }
+const shared = globalThis as unknown as { __blUi?: UiState }
+const ui: UiState = (shared.__blUi ??= { assets: null, unitIcons: {} })
 const dataUrls = new WeakMap<object, string>()
 /** Any sprite (a loaded image, or a recoloured canvas) as a URL usable in <img>. */
 const imgUrl = (img: HTMLImageElement | HTMLCanvasElement) => {
@@ -44,13 +50,13 @@ const imgUrl = (img: HTMLImageElement | HTMLCanvasElement) => {
 }
 /** URL of a building sprite in a kingdom's colour (recoloured colours are rendered once and cached). */
 export const buildingUrl = (color: number, name: string) => {
-  const a = uiAssets
+  const a = ui.assets
   if (!a) return ''
   const set = name === 'House1' ? a.houses : name === 'House3' ? a.lots : name === 'Barracks' ? a.barracks : a.towers
   return imgUrl(set[color])
 }
 /** Ship sprite (bow up) for a kingdom colour. */
-export const shipUrl = (kind: 'boat' | 'zumwalt', color: number) => (uiAssets ? imgUrl(uiAssets.ships[kind][color].up) : '')
+export const shipUrl = (kind: 'boat' | 'zumwalt' | 'cargo' | 'gunship' | 'barge', color: number, dir: 'up' | 'down' | 'left' | 'right' = 'up') => (ui.assets ? imgUrl(ui.assets.ships[kind][color][dir]) : '')
 export const tintStyle = (_color: number): { filter?: string } => ({}) // (sprites are recoloured for real now; kept so call sites stay simple)
 
 const emblemCache = new Map<string, string>()
@@ -67,7 +73,7 @@ export function emblemUrl(emblem: number, color: number, size = 40): string {
   return u
 }
 
-export const unitIcons: Partial<Record<UnitType, string>> = {}
+export const unitIcons: Partial<Record<UnitType, string>> = ui.unitIcons
 
 export async function installUiTheme(assets?: Assets) {
   const root = document.documentElement.style
@@ -81,9 +87,10 @@ export async function installUiTheme(assets?: Assets) {
   ]
   await Promise.all(defs.map(async ([v, p]) => root.setProperty(v, `url(${compactNineSlice(await load(assetUrl(p)))})`)))
   if (assets) {
-    uiAssets = assets
+    ui.assets = assets
     unitIcons.warrior = frameIcon(assets.warrior[0].Idle) // colour 0 is Blue, a native sprite family
     unitIcons.archer = frameIcon(assets.archer[0].Idle)
     unitIcons.lancer = frameIcon(assets.lancer[0].Idle)
+    unitIcons.knight = frameIcon(assets.knight[0].Idle)
   }
 }

@@ -54,8 +54,9 @@ export function isTeamPixel(r: number, g: number, b: number): boolean {
 }
 
 /** The new colour of a team pixel for colour `spec` (hue shift, saturation multiplier, lightness multiplier + offset). */
-export function tintPixel(r: number, g: number, b: number, spec: ColorDef): [number, number, number] {
-  const [h, s, l] = rgbToHsl(r, g, b)
+export function tintPixel(r: number, g: number, b: number, spec: ColorDef, squash?: { center: number; k: number }): [number, number, number] {
+  const [h0, s, l] = rgbToHsl(r, g, b)
+  const h = squash ? squash.center + (h0 - squash.center) * squash.k : h0 // (a hull whose blues range from teal to navy is pulled toward one hue first, so it recolours as one colour)
   const h2 = (h + (spec.shift ?? 0) + 720) % 360, s2 = Math.min(1, s * (spec.sat ?? 1)), l2 = Math.min(1, Math.max(0, l * (spec.light ?? 1) + (spec.lightAdd ?? 0)))
   return hslToRgb(h2, s2, l2)
 }

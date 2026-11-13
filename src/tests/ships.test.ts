@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { BOAT, BOAT_FLAG, TILE, UNIT, ZUMWALT } from '../game/config'
+import { BOAT, BOAT_FLAG, TILE, TOWER, UNIT, ZUMWALT } from '../game/config'
 import { cargoCount, orderSail, spawnBoat, unload, zumwaltFalloff } from '../game/BoatSystem'
-import { makeGame, stepN } from './helpers'
+import { makeGame, stepN, withYards } from './helpers'
 
 // two islands (land '#') separated by 40 tiles of open sea
 const rows = Array.from({ length: 40 }, () => '#'.repeat(30) + '.'.repeat(40) + '#'.repeat(30))
-const mk = (extra: Partial<Parameters<typeof makeGame>[0]> = {}) => makeGame({ rows, towns: [[0, 20, 20], [1, 80, 20]], units: [], ...extra })
+const mk = (extra: Partial<Parameters<typeof makeGame>[0]> = {}) => withYards(makeGame({ rows, towns: [[0, 20, 20], [1, 80, 20]], units: [], ...extra }), 0)
 const px = (c: number) => (c + 0.5) * TILE
 
 describe('building ships', () => {
@@ -25,13 +25,14 @@ describe('building ships', () => {
   })
   it('a Zumwalt costs 300 wood and carries 8 units; construction can be cancelled for a refund', () => {
     const g = mk()
+    g.towns[0].level = 2 // (a Zumwalt needs an upgraded town)
     g.kingdoms[0].lumber = 400
     const site = g.placeBoat(0, 'zumwalt', px(31), px(20))!
     expect(ZUMWALT.cost).toBe(300)
     expect(g.kingdoms[0].lumber).toBe(100)
     expect(g.cancelStructure(site)).toBe(true); expect(g.kingdoms[0].lumber).toBe(400)
     expect(spawnBoat(g, 0, 'zumwalt', px(50), px(20)).cap).toBe(8)
-    expect(ZUMWALT.hp).toBe(UNIT.archer.hp); expect(BOAT.hp).toBe(UNIT.warrior.hp / 2)
+    expect(ZUMWALT.hp).toBe(UNIT.warrior.damage * 2.5 * 12); expect(BOAT.hp).toBe(UNIT.warrior.hp / 2)
   })
 })
 
@@ -62,7 +63,7 @@ describe('sailing, docking and territory', () => {
 })
 
 describe('carrying troops', () => {
-  it('units board a docked boat, stop counting against the population cap, and unload on shore', () => {
+  it('units board a docked boat, keep counting against the population cap, and unload on shore', () => {
     const g = mk()
     const b = spawnBoat(g, 0, 'boat', px(31), px(20))
     const u = g.spawnUnit(0, px(27), px(20))
@@ -72,7 +73,7 @@ describe('carrying troops', () => {
     stepN(g, 25 * 20)
     expect(u.inTower).toBe(BOAT_FLAG + b.id)
     expect(b.cargo).toEqual([u.id]); expect(cargoCount(g, b)).toBe(1)
-    expect(g.pop(0)).toBe(popBefore - 1)
+    expect(g.pop(0)).toBe(popBefore)                       // troops at sea still count against the cap (no second army, no over-capacity on landing)
     expect(unload(g, b)).toBe(1)
     expect(u.inTower).toBe(-1); expect(g.isLandAt(u.x, u.y)).toBe(true); expect(g.pop(0)).toBe(popBefore)
   })
@@ -87,10 +88,13 @@ describe('carrying troops', () => {
 })
 
 describe('Zumwalt gunnery', () => {
-  it('damage falls from 100% to 10% across 15 tiles', () => {
+  it('outranges an archer tower twice over', () => {
+    expect(ZUMWALT.rangeTiles).toBe(2 * UNIT.archer.range * TOWER.rangeMult / TILE)
+  })
+  it('damage falls from 100% to 10% across 24 tiles', () => {
     expect(zumwaltFalloff(0)).toBeCloseTo(1)
-    expect(zumwaltFalloff(15 * TILE)).toBeCloseTo(0.1)
-    expect(zumwaltFalloff(30 * TILE)).toBeCloseTo(0.1)
+    expect(zumwaltFalloff(24 * TILE)).toBeCloseTo(0.1)
+    expect(zumwaltFalloff(40 * TILE)).toBeCloseTo(0.1)
   })
   it('fires bursts of two shells 0.5 s apart, 3 s between volleys, each up to 2.5x a warrior; ships are the default priority', () => {
     const g = mk()
@@ -101,7 +105,7 @@ describe('Zumwalt gunnery', () => {
     z.volleyCd = 0
     const times: number[] = []
     let last = 0
-    for (let i = 0; i < 25 * 8; i++) { g.step(1 / 25); if (g.shells.length > last) times.push(g.time); last = g.shells.length }
+    for (let i = 0; i < 25 * 14; i++) { g.step(1 / 25); if (g.shells.length > last) times.push(g.time); last = g.shells.length } // (the first volley waits 4 s while the guns lock on)
     expect(times.length).toBeGreaterThanOrEqual(4)
     expect(times[1] - times[0]).toBeGreaterThan(0.4); expect(times[1] - times[0]).toBeLessThan(0.65)   // two shots, ~0.5 s apart
     expect(times[2] - times[1]).toBeGreaterThan(2.5)                                                     // then a ~3 s pause
@@ -135,8 +139,9 @@ describe('AI navy', () => {
   const big = () => {
     // kingdom 1 is a large nation (4 towns) on the east island; kingdom 0 sits alone on the west island across the sea
     const g = makeGame({ rows, towns: [[0, 20, 20], [1, 80, 20], [1, 90, 10], [1, 90, 30], [1, 75, 30]], units: [], pawns: true, ai: true, relation: 'war' })
-    for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false }
-    g.kingdoms[1].aggression = 1
+    for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false, knight: false }
+    g.kingdoms[1].aggression = 1; g.kingdoms[1].temperament = 'neutral'
+    for (const t of g.towns) if (t.owner === 1) t.level = 2 // (Zumwalts need upgraded towns)
     return g
   }
   it('builds infantry boats for the crossing, and a large nation saves for a Zumwalt (unlimited harvest) only after its lots and towers', () => {

@@ -1,8 +1,8 @@
-import { DEFAULT_KINGDOMS, islandScale, kingdomsForSeed, MAP, MAX_KINGDOMS, maxStartTowns, START, TILE } from './config'
+import { DEFAULT_KINGDOMS, TOTAL_KINGDOMS, islandScale, kingdomsForSeed, MAP, MAX_KINGDOMS, maxStartTowns, START, TILE } from './config'
 import { worldInfo } from './WorldInfo'
 import { N4, N8, countComponents, inBounds, largestComponent } from './Grid'
 import { hash2, hashSeed, makeRng, type Rng } from './rng'
-import type { Decor, Tree, TreeKind, TownSpawn, World } from './types'
+import type { Decor, GoldSpec, Tree, TreeKind, TownSpawn, World } from './types'
 
 export const MIN_TOWN_SEP = 9 // minimum distance between towns of different kingdoms
 export const MIN_OWN_SEP = 5
@@ -331,9 +331,9 @@ export const isEdgeConnected = (world: World) => countComponents(world.land, wor
 export type Blueprint = { cx: number; cy: number; r: number; kind: 'large' | 'medium' | 'small' | 'islet'; aspect: number; rot: number; seed: number }
 
 /** Where the islands go: big ones first, then smaller ones in the gaps, then curved chains of tiny islets between them. */
-export function planIslands(rng: Rng, size: number): Blueprint[] {
+export function planIslands(rng: Rng, size: number, ring?: { keep: (cx: number, cy: number, r: number) => boolean }): Blueprint[] {
   const out: Blueprint[] = []
-  const free = (cx: number, cy: number, r: number, gap: number) => out.every(o => Math.hypot(o.cx - cx, o.cy - cy) >= (r + o.r) * (o.kind === 'islet' || gap < 1.2 ? gap : Math.max(gap, 1.3)) + 3)
+  const free = (cx: number, cy: number, r: number, gap: number) => (!ring || ring.keep(cx, cy, r)) && out.every(o => Math.hypot(o.cx - cx, o.cy - cy) >= (r + o.r) * (o.kind === 'islet' || gap < 1.2 ? gap : Math.max(gap, 1.3)) + 3)
   const add = (kind: Blueprint['kind'], lo: number, hi: number, gap: number, tries = 500): Blueprint | null => {
     for (let t = 0; t < tries; t++) {
       const r = lo + rng.next() * (hi - lo) * (1 - t / (tries * 1.6)) // shrink slowly when space is tight
@@ -346,12 +346,18 @@ export function planIslands(rng: Rng, size: number): Blueprint[] {
     }
     return null
   }
-  add('large', 40, 50, 1.3); add('large', 34, 44, 1.3)
-  if (rng.chance(0.45)) add('large', 30, 38, 1.3)
-  for (let i = 0, n = rng.int(3, 5); i < n; i++) add('medium', 16, 26, 1.25)
-  for (let i = 0, n = rng.int(5, 8); i < n; i++) add('small', 8, 14, 1.2)
+  if (ring) { // the outer ring of the big map: several large lands, plenty of medium and small islands, long islet chains
+    add('large', 36, 46, 1.3); add('large', 32, 42, 1.3); add('large', 28, 36, 1.3); add('large', 26, 34, 1.25)
+    for (let i = 0, n = rng.int(12, 16); i < n; i++) add('medium', 16, 26, 1.25)
+    for (let i = 0, n = rng.int(20, 28); i < n; i++) add('small', 8, 14, 1.2)
+  } else { // the original world: these numbers and the order of rng calls must not change, or old seeds would make different maps
+    add('large', 40, 50, 1.3); add('large', 34, 44, 1.3)
+    if (rng.chance(0.45)) add('large', 30, 38, 1.3)
+    for (let i = 0, n = rng.int(3, 5); i < n; i++) add('medium', 16, 26, 1.25)
+    for (let i = 0, n = rng.int(5, 8); i < n; i++) add('small', 8, 14, 1.2)
+  }
   // chains of islets (stepping stones): each starts in open water and bends gently
-  for (let c = 0, chains = rng.int(4, 6); c < chains; c++) {
+  for (let c = 0, chains = ring ? rng.int(8, 11) : rng.int(4, 6); c < chains; c++) {
     let x = rng.next() * size, y = rng.next() * size, ang = rng.next() * Math.PI * 2, bend = (rng.next() - 0.5) * 0.5
     for (let i = 0, n = rng.int(6, 10); i < n; i++) {
       const r = 3.4 + rng.next() * 3.4
@@ -421,10 +427,107 @@ export function allocateKingdoms(sizes: number[], kingdoms: number): number[] {
 
 export type ArchipelagoOptions = { playerTowns?: number; kingdoms?: number }
 
+/**
+ * Gold. Stones 1 and 2 are scattered thinly over every landmass (inhabited too), stones 3–5 only sit on uninhabited islands, and stone 6 is a
+ * rare find there. A jackpot cluster (a 6, a 5, two or three 4s and a couple of 1s, packed like the reference picture) appears in roughly one
+ * world in three (every 2–4 worlds), on an uninhabited island when there is one.
+ */
+export function placeGold(world: World, rng: Rng, spawns: TownSpawn[]): GoldSpec[] {
+  const { w, h, land } = world
+  const info = worldInfo(world), cd = coastDistance(land, w, h)
+  const inhabited = new Set(spawns.map(s => info.landmass[s.cy * w + s.cx]))
+  const blocked = new Uint8Array(w * h)
+  for (const t of world.trees) blocked[t.cell] = 1
+  for (const d of world.decor) blocked[d.cell] = 1
+  const nearTown = (cx: number, cy: number, r: number) => spawns.some(s => Math.max(Math.abs(s.cx - cx), Math.abs(s.cy - cy)) <= r)
+  const out: GoldSpec[] = []
+  const free = (cx: number, cy: number, ring = 4) => inBounds(w, h, cx, cy) && land[cy * w + cx] === 1 && cd[cy * w + cx] >= 1 && !blocked[cy * w + cx] && !nearTown(cx, cy, ring)
+  const put = (cx: number, cy: number, stone: GoldSpec['stone'], jackpot = false, ox = 0, oy = 0) => {
+    blocked[cy * w + cx] = 1
+    out.push({ stone, jackpot, x: (cx + 0.5 + ox) * TILE, y: (cy + 0.75 + oy) * TILE })
+  }
+  // scattered nuggets (stones 1 and 2) everywhere
+  for (let cy = 0; cy < h; cy++) for (let cx = 0; cx < w; cx++) if (free(cx, cy, 5) && rng.chance(0.006)) put(cx, cy, rng.chance(0.5) ? 1 : 2)
+  const wild = info.sizes.map((n, id) => ({ id, n })).filter(l => !inhabited.has(l.id) && l.n >= 24)
+  const cellsOf = (id: number) => { const c: number[] = []; for (let i = 0; i < w * h; i++) if (info.landmass[i] === id) { const cx = i % w, cy = (i / w) | 0; if (free(cx, cy, 0)) c.push(i) } return c }
+  const pickCell = (cells: number[]) => cells.length ? cells[rng.int(0, cells.length - 1)] : -1
+  // veins on uninhabited islands: stones 3–5, more on bigger islands
+  for (const l of wild) {
+    const cells = cellsOf(l.id), veins = rng.chance(0.65) ? Math.min(3, 1 + Math.floor(l.n / 220)) : 0
+    for (let k = 0; k < veins; k++) {
+      const c = pickCell(cells); if (c < 0) break
+      const r = rng.next(), stone: GoldSpec['stone'] = r < 0.5 ? 3 : r < 0.85 ? 4 : 5
+      put(c % w, (c / w) | 0, stone)
+    }
+  }
+  const spots = wild.length ? wild : info.sizes.map((n, id) => ({ id, n })).filter(l => l.n >= 60)
+  // a rare stone 6 (about one world in three has one)
+  if (spots.length && rng.chance(0.35)) { const c = pickCell(cellsOf(spots[rng.int(0, spots.length - 1)].id)); if (c >= 0) put(c % w, (c / w) | 0, 6) }
+  // jackpot: about one world in three
+  if (spots.length && rng.chance(1 / 3)) {
+    const bigFirst = spots.slice().sort((a, b) => b.n - a.n)
+    for (const l of bigFirst.slice(0, 3)) {
+      const cells = cellsOf(l.id).filter(i => cd[i] >= 3)
+      const c = pickCell(cells); if (c < 0) continue
+      const cx = c % w, cy = (c / w) | 0
+      // layout in tiles (dx, dy, stone), modelled on the reference: a big 5 left, the 6 high on the right, 4s in front, 1s as pebbles
+      const lay: [number, number, GoldSpec['stone']][] = [[0, 0, 5], [2, -1, 6], [1, 1, 4], [2, 1, 4], [3, 0, 4], [0, 2, 1], [3, 2, 1]]
+      if (lay.every(([dx, dy]) => free(cx + dx, cy + dy, 0))) { for (const [dx, dy, st] of lay) put(cx + dx, cy + dy, st, true); break }
+    }
+  }
+  return out
+}
+
+/**
+ * The big map: the seed's original 200x200 world (same islands, towns, trees, gold and kingdoms as ever) sits in the middle of a 300x300 ocean,
+ * and the outer ring gets its own islands and extra kingdoms (ids after the original ones) so a game holds TOTAL_KINGDOMS in all.
+ * An explicit kingdomCount of 15 or fewer keeps the old single-core game; larger counts add ring kingdoms up to that many.
+ */
 export function generateArchipelago(seedInput: string | number, kingdomCount?: number, playerTowns?: number): Generated {
   const seed = typeof seedInput === 'number' ? seedInput >>> 0 : hashSeed(seedInput)
-  const kcount = Math.max(2, Math.min(MAX_KINGDOMS, kingdomCount ?? kingdomsForSeed(seed)))
-  const size = MAP.size
+  const total = Math.max(2, Math.min(MAX_KINGDOMS, kingdomCount ?? TOTAL_KINGDOMS))
+  const baseCount = kingdomCount !== undefined && kingdomCount <= DEFAULT_KINGDOMS.max ? total : Math.min(total, kingdomsForSeed(seed))
+  const core = generateCore(seed, baseCount, playerTowns)
+  const size = MAP.size, c = MAP.core, off = (size - c) >> 1
+  const land = new Uint8Array(size * size)
+  for (let y = 0; y < c; y++) for (let x = 0; x < c; x++) land[(y + off) * size + x + off] = core.world.land[y * c + x]
+  const world: World = { seed, w: size, h: size, land, trees: [], decor: [], gold: [], island: { ...core.world.island, x: core.world.island.x + off, y: core.world.island.y + off } }
+  const mv = (cell: number) => ((((cell / c) | 0) + off) * size) + (cell % c) + off
+  for (const t of core.world.trees) world.trees.push({ ...t, cell: mv(t.cell), x: t.x + off * TILE, y: t.y + off * TILE })
+  for (const d of core.world.decor) world.decor.push({ ...d, cell: mv(d.cell), x: d.x + off * TILE, y: d.y + off * TILE })
+  for (const gd of core.world.gold ?? []) world.gold!.push({ ...gd, x: gd.x + off * TILE, y: gd.y + off * TILE })
+  const spawns: TownSpawn[] = core.spawns.map(s => ({ ...s, cx: s.cx + off, cy: s.cy + off }))
+  const extra = total - baseCount
+  if (extra > 0) {
+    const gap = 6, lo = off - gap, hi = off + c + gap // the core's square (plus a channel) is off limits to ring islands
+    const keep = (cx: number, cy: number, r: number) => { const m = r * 1.2 + 2; return cx + m < lo || cx - m > hi || cy + m < lo || cy - m > hi }
+    let ringWorld: World | null = null, ringSpawns: TownSpawn[] = []
+    for (let attempt = 0; attempt < 12 && !ringWorld; attempt++) {
+      const rng = makeRng((seed ^ 0x2f6e2b1) + attempt * 104729)
+      const ringLand = landFromBlueprints(planIslands(rng, size, { keep }), size, size, seed + attempt + 77)
+      for (let y = lo; y <= hi; y++) for (let x = lo; x <= hi; x++) ringLand[y * size + x] = 0
+      const rw: World = { seed: seed ^ 0x2f6e2b1, w: size, h: size, land: ringLand, trees: [], decor: [], island: world.island }
+      if (worldInfo(rw).sizes.filter(n => n >= 260).length >= Math.min(extra, 4) || attempt === 11) { ringWorld = rw; if (attempt < 11) break }
+    }
+    const rw = ringWorld!
+    const rng = makeRng(seed ^ 0x7a1e5d3)
+    const rs = placeArchipelagoTowns(rw, rng, extra)
+    populateProps(rw, rng, rs)
+    rw.gold = placeGold(rw, makeRng(seed ^ 0x3c6ef372), rs)
+    ringSpawns = rs.map(s => ({ ...s, kingdom: s.kingdom + baseCount })) // kingdom 0 of the ring world is an ordinary rival here
+    for (let i = 0; i < size * size; i++) if (rw.land[i]) world.land[i] = 1
+    const tn = world.trees.length, dn = world.decor.length
+    rw.trees.forEach((t, i) => world.trees.push({ ...t, id: tn + i }))
+    rw.decor.forEach((d, i) => world.decor.push({ ...d, id: dn + i }))
+    world.gold!.push(...(rw.gold ?? []))
+    spawns.push(...ringSpawns)
+    spawns.sort((a, b) => a.kingdom - b.kingdom)
+  }
+  return { world, spawns }
+}
+
+function generateCore(seed: number, kcount: number, playerTowns?: number): Generated {
+  const size = MAP.core
   let world: World | null = null
   for (let attempt = 0; attempt < 12 && !world; attempt++) {
     const rng = makeRng(seed + attempt * 7919)
@@ -448,6 +551,7 @@ export function generateArchipelago(seedInput: string | number, kingdomCount?: n
   const rng = makeRng(seed ^ 0x51ed270b)
   const spawns = placeArchipelagoTowns(w0, rng, kcount, playerTowns)
   populateProps(w0, rng, spawns)
+  w0.gold = placeGold(w0, makeRng(seed ^ 0x6c6f6c64), spawns)
   return { world: w0, spawns }
 }
 

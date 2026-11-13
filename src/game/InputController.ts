@@ -1,9 +1,10 @@
 import { ROUTE, UNIT_BODY } from './config'
 import { clampCamera, screenToWorld, zoomAt, type Camera } from './Camera'
 import type { Game } from './Game'
+import { focusRegion } from './Economy'
 import { sampleDraft } from './Routes'
 
-type Mode = 'none' | 'pan' | 'units' | 'pawn' | 'place' | 'brush' | 'boats'
+type Mode = 'none' | 'pan' | 'units' | 'pawn' | 'place' | 'brush' | 'boats' | 'inspect'
 
 /**
  * Pointer logic without DOM dependencies (the canvas glue just forwards events), so it can be unit tested.
@@ -37,6 +38,7 @@ export class InputController {
     this.camX = this.cam.x; this.camY = this.cam.y
     if (this.brush) { this.mode = 'brush'; this.paint(sx, sy); return }
     if (g.placing) { this.mode = 'place'; return }
+    if (g.strikeMode || g.routePick) { this.mode = 'pan'; return } // the next click is a target / port, not a selection
     const w = screenToWorld(this.cam, sx, sy)
     const pick = g.pickUnit(w.x, w.y, this.hitR())
     if (pick?.kind === 'units') {
@@ -47,7 +49,15 @@ export class InputController {
       this.unitId = id; this.mode = 'units'
       return
     }
+    if (!pick && g.selection?.kind === 'pawn') { // a pawn is selected: a click on a cargo boat, gold stone or sheep sends it there
+      const tg = g.pawnTargetAt(w.x, w.y), p = g.pawnById(g.selection.id)
+      if (tg && p) { g.orderPawnTarget(p, tg); this.mode = 'inspect'; return }
+    }
     const boat = pick ? null : g.pickBoat(w.x, w.y)
+    if (!pick && !boat) { // any other nation's ship can be clicked to see what it carries (no orders)
+      const foreign = g.pickBoat(w.x, w.y, -1)
+      if (foreign) { g.selection = { kind: 'boats', ids: [foreign.id] }; this.mode = 'inspect'; return }
+    }
     if (boat) { // ships are selected like units: drag from one to draw its sailing route
       const cur = g.selection?.kind === 'boats' ? g.selection.ids : []
       if (shift) g.selection = { kind: 'boats', ids: cur.includes(boat.id) ? cur.filter(i => i !== boat.id) : [...cur, boat.id] }
@@ -116,6 +126,11 @@ export class InputController {
       const err = g.structureError(kind, 0, w.x, w.y)
       if (err) g.say(err)
       else { g.placeStructure(kind, 0, w.x, w.y); if (!this.shift) g.placing = false }
+    } else if (this.mode === 'pan' && !this.dragging && g.strikeMode) {
+      g.strikeAt(w.x, w.y)
+    } else if (this.mode === 'pan' && !this.dragging && g.routePick) {
+      const town = g.pickTown(w.x, w.y)
+      if (town) g.pickRoutePort(town); else g.cancelRoutePick()
     } else if (this.mode === 'pan' && !this.dragging) {
       // click on empty ground: pawn orders go to a tree under the pointer, otherwise clear the selection
       const t = g.selection?.kind === 'pawn' ? g.pickTree(w.x, w.y, 44) : -1
@@ -127,7 +142,8 @@ export class InputController {
         else if (town) { // clicking an enemy town a second time flips its objective (CAPTURE ⇄ RAZE)
           if (g.selection?.kind === 'town' && g.selection.id === town.id && town.owner !== 0) g.toggleTownRaze(town.id)
           g.selection = { kind: 'town', id: town.id }
-        } else g.selection = null
+          if (town.owner === 0) g.regionView = town.store ? town.id : -1
+        } else { g.selection = null; focusRegion(g, w.x, w.y) }
       }
     }
     this.draft = null; this.dragging = false; this.mode = 'none'
@@ -138,7 +154,11 @@ export class InputController {
     const g = this.game, w = screenToWorld(this.cam, sx, sy), r = InputController.BRUSH_PX / this.cam.zoom + 12
     const ids = g.selection?.kind === 'units' ? [...g.selection.ids] : []
     for (const u of g.units) if (u.faction === 0 && u.state !== 'dead' && u.inTower < 0 && !ids.includes(u.id) && Math.hypot(u.x - w.x, u.y - 14 - w.y) <= r) ids.push(u.id)
-    g.selection = ids.length ? { kind: 'units', ids } : g.selection
+    if (ids.length) { g.selection = { kind: 'units', ids }; return }
+    // no troops under the brush: sweep up ships instead (a fleet can be brush-selected too)
+    const boatIds = g.selection?.kind === 'boats' ? [...g.selection.ids] : []
+    for (const b of g.boats) if (b.faction === 0 && !boatIds.includes(b.id) && Math.hypot(b.x - w.x, b.y - w.y) <= r + 40) boatIds.push(b.id)
+    if (boatIds.length) g.selection = { kind: 'boats', ids: boatIds }
   }
 
   /** C: toggle brush selection. */

@@ -1,7 +1,7 @@
 import { BOAT_FLAG, DAMAGE, TILE, TOWER, TOWN, UNIT, UNIT_BODY } from './config'
 import type { Game } from './Game'
-import { damageBoat } from './BoatSystem'
-import type { Boat, Tower, Town, Unit } from './types'
+import { boatRadius, damageBoat } from './BoatSystem'
+import type { Boat, Outpost, Tower, Town, Unit } from './types'
 
 /** A wounded unit hits softer: damage × max(0.2, health fraction). */
 export const healthFactor = (u: { hp: number; maxHp: number }) => Math.max(DAMAGE.minHealthFactor, Math.min(1, u.hp / u.maxHp))
@@ -12,7 +12,7 @@ const near: number[] = []
 export function damageUnit(g: Game, target: Unit, amount: number, attackerFaction = -1, from?: { x: number; y: number }) {
   if (target.state === 'dead') return
   if (attackerFaction >= 0 && from && g.hostile(attackerFaction, target.faction)) g.addGrievance(target.faction, attackerFaction, from.x, from.y, 'attack')
-  target.hp -= target.mode === 'block' ? amount * (1 - UNIT_BODY.blockReduction) : amount
+  target.hp -= target.mode === 'block' && target.type !== 'lancer' ? amount * (1 - UNIT_BODY.blockReduction) : amount
   g.fx.push({ kind: 'hit', x: target.x, y: target.y - 30, t: 0 }); g.sounds.push({ name: 'hit', x: target.x, y: target.y })
   if (attackerFaction >= 0) g.diplomacy.fighting(attackerFaction, target.faction, g.time)
   if (target.hp <= 0) g.killUnit(target, attackerFaction)
@@ -34,14 +34,15 @@ export function damageTower(g: Game, t: Tower, amount: number, attackerFaction: 
 }
 
 /** Start a smooth shove: the target glides away from `from` by up to `dist` px (stopping at water) and then re-focuses. */
-function knockback(g: Game, target: Unit, fx: number, fy: number, dist: number) {
+export function knockback(g: Game, target: Unit, fx: number, fy: number, dist: number) {
   if (target.inTower >= 0) return
   const dx = target.x - fx, dy = target.y - fy, d = Math.hypot(dx, dy) || 1
   for (let f = 1; f > 0; f -= 0.25) {
     const nx = target.x + (dx / d) * dist * f, ny = target.y + (dy / d) * dist * f
     if (g.isLandAt(nx, ny)) {
       target.kbSx = target.x; target.kbSy = target.y; target.kbEx = nx; target.kbEy = ny; target.kbT = 0
-      target.state = 'idle'; target.attackT = 0; target.refocusT = UNIT_BODY.refocusTime
+      target.state = 'idle'; target.attackT = 0
+      if (!g.kingdoms[target.faction].isPlayer) target.refocusT = UNIT_BODY.refocusTime // (an AI unit turns on whoever shoved it; the player's does not leave its orders)
       return
     }
   }
@@ -91,7 +92,7 @@ export function updateCombat(g: Game, dt: number) {
 
     // pick the nearest hostile unit or tower in range (for a moving unit: only those in its way)
     const range = st.range * rangeMult
-    let best: Unit | null = null, bestTower: Tower | null = null, bestTown: Town | null = null, bestBoat: Boat | null = null, bestD = range
+    let best: Unit | null = null, bestTower: Tower | null = null, bestTown: Town | null = null, bestBoat: Boat | null = null, bestOutpost: Outpost | null = null, bestD = range
     g.unitHash.query(u.x, u.y, range, near)
     for (let k = 0; k < near.length; k++) {
       const o = us[near[k]]
@@ -110,7 +111,7 @@ export function updateCombat(g: Game, dt: number) {
     }
     for (const b of g.boats) { // enemy ships are fair game for anyone in reach: melee troops strike hulls close to the shore, archers and tower garrisons shoot them at sea
       if (!g.hostile(u.faction, b.faction)) continue
-      const d = Math.hypot(b.x - u.x, b.y - u.y) - (b.kind === 'zumwalt' ? 80 : 46)
+      const d = (Math.hypot(b.x - u.x, b.y - u.y) - boatRadius(b)) / (u.type === 'archer' ? UNIT_BODY.archerBoatRange : 1) // archers reach ships 1.5x as far as other targets
       if (d >= bestD) continue
       if (routed && ((b.x - u.x) * hx + (b.y - u.y) * hy) / (Math.hypot(b.x - u.x, b.y - u.y) || 1) < 0.15) continue
       bestD = d; bestBoat = b; best = null; bestTower = null; bestTown = null
@@ -124,7 +125,16 @@ export function updateCombat(g: Game, dt: number) {
         bestD = d; bestTown = t
       }
     }
-    if (!best && !bestTower && !bestTown && !bestBoat) {
+    if (!best && !bestTower && !bestTown && !bestBoat && !garrison) { // lowest priority: a hostile outpost (1 hp: one strike removes it; towers' archers never shoot them)
+      for (const o of g.outposts) {
+        if (!g.hostile(u.faction, o.faction)) continue
+        const d = Math.hypot(o.x - u.x, o.y - u.y) - 18
+        if (d >= bestD) continue
+        if (routed && ((o.x - u.x) * hx + (o.y - u.y) * hy) / (Math.hypot(o.x - u.x, o.y - u.y) || 1) < 0.15) continue
+        bestD = d; bestOutpost = o
+      }
+    }
+    if (!best && !bestTower && !bestTown && !bestBoat && !bestOutpost) {
       if (u.chase >= 0 && u.refocusT > 0 && !routed) { const f = g.unitById(u.chase); if (f && f.state !== 'dead' && f.inTower < 0) continue } // keep pursuing the archer that shot us
       u.chase = -1
       if ((u.type === 'warrior' || u.type === 'lancer') && !garrison && !u.hold && !routed) { // a user's order always outranks instinct
@@ -141,9 +151,9 @@ export function updateCombat(g: Game, dt: number) {
       continue
     }
     u.chase = -1
-    const tgt = best ?? bestTower ?? bestBoat ?? bestTown!
+    const tgt = best ?? bestTower ?? bestBoat ?? bestOutpost ?? bestTown!
     const tx = tgt.x, ty = tgt.y
-    u.target = tgt.id; u.targetKind = best ? 'unit' : bestTower ? 'tower' : bestBoat ? 'boat' : 'town'
+    u.target = tgt.id; u.targetKind = best ? 'unit' : bestTower ? 'tower' : bestBoat ? 'boat' : bestOutpost ? 'outpost' : 'town'
     u.aimX = tx - u.x; u.aimY = ty - u.y
     u.facing = tx < u.x ? -1 : 1
     u.state = 'attacking'; u.attackT = 0; u.attackHit = false // the route (if any) is kept and resumed afterwards
@@ -163,9 +173,16 @@ function resolveHit(g: Game, u: Unit, dmg: number, reach: number) {
   dmg *= healthFactor(u)
   if (u.targetKind === 'boat') {
     const b = g.boatById(u.target)
-    if (!b || b.hp <= 0 || Math.hypot(b.x - u.x, b.y - u.y) - (b.kind === 'zumwalt' ? 80 : 46) > reach) return
+    if (!b || b.hp <= 0 || Math.hypot(b.x - u.x, b.y - u.y) - boatRadius(b) > reach * (u.type === 'archer' ? UNIT_BODY.archerBoatRange : 1)) return
     if (u.type === 'archer') g.projectiles.push({ x0: u.x, y0: u.y - 40, x1: b.x, y1: b.y - 10, t: 0, dur: 0.3 })
     damageBoat(g, b, dmg, u.faction)
+    return
+  }
+  if (u.targetKind === 'outpost') {
+    const o = g.outposts.find(q => q.id === u.target)
+    if (!o || Math.hypot(o.x - u.x, o.y - u.y) - 18 > reach) return
+    if (u.type === 'archer') g.projectiles.push({ x0: u.x, y0: u.y - 40, x1: o.x, y1: o.y - 20, t: 0, dur: 0.25 })
+    g.destroyOutpost(o) // one strike
     return
   }
   if (u.targetKind === 'town') {

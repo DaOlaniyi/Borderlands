@@ -144,44 +144,44 @@ describe('AI behaviour', () => {
   it('rests freshly produced units until they reach the ready health threshold', () => {
     const g = makeGame({ rows, towns: [[0, 60, 30], [1, 15, 18]], units: [[1, 24, 18], [1, 25, 19], [1, 24, 20]], relation: 'war', ai: true })
     for (const u of g.units) u.hp = 1
-    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }
+    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }
     g.time = 100
     stepN(g, 25 * 25)
     const home = g.towns[1]
     for (const u of g.units) expect(Math.hypot(u.x - home.x, u.y - home.y)).toBeLessThan(4 * TILE) // walked back toward the town, not toward the enemy
     expect(AI.readyHp).toBeGreaterThanOrEqual(0.4); expect(AI.readyHp).toBeLessThanOrEqual(0.5)
   })
-  it('sends 60–80% of its troops at the enemy in a war, keeping the rest back', () => {
+  it('with a clear edge over an undefended enemy it sends nearly everyone (95 %) at once', () => {
     const g = makeGame({ rows, towns: [[0, 62, 18], [1, 8, 18]], units: [[1, 10, 18], [1, 10, 19], [1, 11, 18], [1, 11, 19], [1, 12, 18], [1, 12, 19], [1, 13, 18], [1, 13, 19], [1, 14, 18], [1, 14, 19]], relation: 'war', ai: true })
-    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false }
+    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false, knight: false }
     g.time = 100
     stepN(g, 25 * 12)
     const heading = g.units.filter(u => u.goalX > g.towns[1].x + 14 * TILE).length
-    expect(heading / g.units.length).toBeGreaterThanOrEqual(0.6); expect(heading / g.units.length).toBeLessThanOrEqual(0.8)
+    expect(heading / g.units.length).toBeGreaterThanOrEqual(0.85)
   })
   it('presses toward the enemy town nearest to its reach rather than a far one', () => {
     const g = makeGame({ rows, towns: [[0, 30, 18], [0, 66, 4], [1, 8, 18]], units: [[1, 10, 18], [1, 10, 19], [1, 11, 18], [1, 11, 19]], relation: 'war', ai: true })
-    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false }
+    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false, knight: false }
     g.time = 100
     stepN(g, 25 * 6)
     expect(g.aiMemo.target[1]).toBe(0) // the closer of the player's two towns
   })
   it('does not retreat from being cut off while healthy, but does once hurt', () => {
     const g = makeGame({ rows, towns: [[0, 60, 18], [1, 8, 18]], units: [[1, 40, 18], [1, 10, 19], [1, 11, 19], [1, 12, 19]], relation: 'war', ai: true })
-    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false }
+    g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false, knight: false }
     g.time = 100
     const scout = g.units[0]
     stepN(g, 25 * 3)
     expect(scout.cutOff).toBe(true)
     expect(scout.aiRole).not.toBe('retreat')
-    scout.hp = scout.maxHp * 0.3
+    scout.hp = scout.maxHp * 0.15
     stepN(g, 25 * 4)
-    expect(scout.aiRole === 'retreat' || scout.state === 'dead' || scout.hp < scout.maxHp * 0.3).toBe(true)
+    expect(scout.aiRole === 'retreat' || scout.state === 'dead' || scout.hp < scout.maxHp * 0.15).toBe(true)
   })
   it('dashes at an undefended town and keeps it', () => {
     noAttrition(() => {
       const g = makeGame({ rows, towns: [[0, 36, 18], [1, 25, 18]], units: [[1, 27, 18], [1, 26, 19], [1, 26, 17]], relation: 'war', ai: true })
-      g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false }
+      g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }; g.kingdoms[0].produce = { warrior: false, archer: false, lancer: false, knight: false }
       g.time = 100
       stepN(g, 25 * 150)
       expect(g.towns[0].owner).toBe(1)
@@ -197,7 +197,7 @@ describe('AI behaviour', () => {
   })
   it('keeps towers off the exact frontline and out of active fights', () => {
     const g = makeGame({ rows, towns: [[0, 8, 18], [1, 26, 18]], units: [], relation: 'neutral', ai: true })
-    g.kingdoms[1].lumber = 2000; g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }
+    g.kingdoms[1].lumber = 2000; g.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }
     for (let i = 0; i < 25 * 120; i++) { g.step(1 / 25); g.kingdoms[1].lumber = 2000 }
     const towers = g.towers.filter(t => t.kind === 'tower' && t.faction === 1)
     expect(towers.length).toBeGreaterThan(0)
@@ -208,7 +208,7 @@ describe('AI behaviour', () => {
     }
     // an active fight next to the only good spot suppresses building
     const h = makeGame({ rows, towns: [[0, 8, 18], [1, 26, 18]], units: [[0, 21, 18], [1, 21, 18]], relation: 'war', ai: true })
-    h.kingdoms[1].lumber = 2000; h.kingdoms[1].produce = { warrior: false, archer: false, lancer: false }; h.kingdoms[0].produce = { warrior: false, archer: false, lancer: false }
+    h.kingdoms[1].lumber = 2000; h.kingdoms[1].produce = { warrior: false, archer: false, lancer: false, knight: false }; h.kingdoms[0].produce = { warrior: false, archer: false, lancer: false, knight: false }
     h.units[1].x = h.units[0].x + 30
     for (let i = 0; i < 25 * 6; i++) { h.step(1 / 25); h.kingdoms[1].lumber = 2000 }
     expect(h.towers.filter(t => t.faction === 1 && t.kind === 'tower').every(t => Math.hypot(t.x - h.units[0].x, t.y - h.units[0].y) > AI.quietWarzone * TILE)).toBe(true)
