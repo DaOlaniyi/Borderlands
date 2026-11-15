@@ -1,5 +1,6 @@
 import { CARGO, MEAT, POP, SETTLE, TERRITORY, TILE, TOWN_LEVEL, type Stock } from './config'
 import type { Game } from './Game'
+import { onColony } from './Letters'
 import { emptyStock } from './BoatSystem'
 import { landmassAt } from './WorldInfo'
 import { logEvent, spend } from './Stats'
@@ -10,6 +11,24 @@ export const RESOURCES: Res[] = ['lumber', 'gold', 'meat']
 
 // ---------------------------------------------------------------- town / settlement stats
 export const isSettlement = (t: Town) => t.kind === 'settlement'
+
+const COLONY_NAMES = ['Haven', 'Landing', 'Harbour', 'Watch', 'Reach', 'Anchorage', 'Foothold', 'Cove', 'Bastion', 'Beacon', 'Hollow', 'Rest', 'Stead', 'Mooring', 'Wardhold', 'Fairhaven', 'Gull Point', 'Tidewater', 'Driftwood', 'Saltmarsh', 'Windward', 'Lantern Quay', 'Ironstrand', 'Greenholm', 'Kelpmere', 'Stormlee', 'Larkspur', 'Highwater', 'Cairn', 'Barrow']
+/** A fresh colony name for a kingdom: the next unused word of the list (a second use gets a Roman numeral). */
+export function colonyName(g: Game, faction: number): string {
+  const used = g.towns.filter(t => t.kind === 'settlement' && t.name).map(t => t.name!)
+  for (let round = 0; round < 6; round++) for (let i = 0; i < COLONY_NAMES.length; i++) {
+    const base = COLONY_NAMES[(i + faction * 7 + g.towns.length * 3) % COLONY_NAMES.length], name = round ? `${base} ${['', 'II', 'III', 'IV', 'V', 'VI'][round]}` : base
+    if (!used.includes(name)) return name
+  }
+  return `Colony ${g.towns.length}`
+}
+/** What a town is called on screen: a colony is "Haven of Greywater" (follows the owner's name) unless the player named it. */
+export function townLabel(g: Game, t: Town): string {
+  if (t.kind !== 'settlement') return t.kind === 'barracks' ? 'Barracks' : 'Town'
+  const base = t.name ?? 'Outpost'
+  if (t.renamed || t.owner < 0) return base
+  return `${base} of ${g.kingdoms[t.owner]?.name ?? '?'}`
+}
 export const townRadius = (t: Town) => t.kind === 'settlement' ? SETTLE.radius[t.level - 1] : (t.kind === 'barracks' ? TERRITORY.barracksRadius : TERRITORY.townRadius) + (t.level >= 2 ? TOWN_LEVEL.radiusBonus : 0)
 export const townWeight = (t: Town) => t.kind === 'settlement' ? SETTLE.weight[t.level - 1] : (t.kind === 'barracks' ? TERRITORY.barracksWeight : TERRITORY.townWeight) * (t.level >= 2 ? TOWN_LEVEL.weightBonus : 1) // (an upgraded town pulls harder on the border)
 export const townCap = (t: Town) => t.kind === 'settlement' ? SETTLE.cap[t.level - 1] : (t.kind === 'barracks' ? POP.perBarracks : POP.perTown) + (t.level >= 2 ? TOWN_LEVEL.cap[1] - TOWN_LEVEL.cap[0] : 0)
@@ -130,7 +149,8 @@ export function settlementError(g: Game, faction: number, x: number, y: number):
   if (g.towns.some(t => !t.ruined && Math.hypot(t.x - x, t.y - y) < SETTLE.minTownGapTiles * TILE)) return 'Too close to another town or settlement'
   if (!g.units.some(u => u.faction === faction && u.state !== 'dead' && u.inTower < 0 && landmassAt(g.world, u.x, u.y) === land)) return 'Land at least one troop on this island first'
   if (!g.boats.some(b => b.faction === faction && b.kind === 'cargo' && b.docked && b.dockCell >= 0 && g.info.landmass[b.dockCell] === land)) return 'A cargo boat must be moored against this island'
-  if (g.kingdoms[faction].lumber < SETTLE.cost) return `Needs ${SETTLE.cost} lumber`
+  const moored = g.boats.filter(b => b.faction === faction && b.kind === 'cargo' && b.docked && b.dockCell >= 0 && g.info.landmass[b.dockCell] === land).reduce((n, b) => n + b.load.lumber, 0) // (lumber landed by the cargo boat counts: it pays for the settlement first)
+  if (g.kingdoms[faction].lumber + moored < SETTLE.cost) return `Needs ${SETTLE.cost} lumber (in your home stockpile or aboard the cargo boat moored here)`
   return null
 }
 
@@ -182,7 +202,10 @@ export function placeSettlement(g: Game, faction: number, x: number, y: number):
   if (settlementError(g, faction, x, y)) return null
   const cx = Math.floor(x / TILE), cy = Math.floor(y / TILE)
   const boat = g.boats.filter(b => b.faction === faction && b.kind === 'cargo' && b.docked).sort((a, b) => Math.hypot(a.x - x, a.y - y) - Math.hypot(b.x - x, b.y - y))[0]
-  g.spendLumber(faction, SETTLE.cost)
+  // the moored cargo boats' lumber pays first, the nation's stockpile pays what is left
+  let owed = SETTLE.cost
+  for (const b of g.boats.filter(q => q.faction === faction && q.kind === 'cargo' && q.docked && q.dockCell >= 0 && g.info.landmass[q.dockCell] === landmassAt(g.world, x, y)).sort((a, c) => Math.hypot(a.x - x, a.y - y) - Math.hypot(c.x - x, c.y - y))) { const take = Math.min(owed, b.load.lumber); b.load.lumber -= take; owed -= take }
+  if (owed > 0) g.spendLumber(faction, owed)
   spend(g, faction, 'settlement', SETTLE.cost); g.stats.k[faction].settlementsFounded++; logEvent(g, 'town', `${g.label(faction)} founded a settlement`, faction)
   const store: Stock = emptyStock()
   store.meat = MEAT.startStock
@@ -194,13 +217,14 @@ export function placeSettlement(g: Game, faction: number, x: number, y: number):
     g.crates = g.crates.filter(q => q !== c)
   }
   const hp = SETTLE.hp // (level 1)
-  const t: Town = { id: g.towns.length, cx, cy, x: (cx + 0.5) * TILE, y: (cy + 0.5) * TILE, owner: faction, kind: 'settlement', level: 1, store, meatT: 0, upkeepT: 0, land: landmassAt(g.world, x, y), crate: null, abandoned: false, hitAt: -99, pawnIds: [], flash: 1, hp, maxHp: hp, stock: 0, produce: true, raze: false, ruined: false }
+  const t: Town = { id: g.towns.length, cx, cy, x: (cx + 0.5) * TILE, y: (cy + 0.5) * TILE, owner: faction, kind: 'settlement', level: 1, store, meatT: 0, upkeepT: 0, land: landmassAt(g.world, x, y), crate: null, name: colonyName(g, faction), abandoned: false, hitAt: -99, pawnIds: [], flash: 1, hp, maxHp: hp, stock: 0, produce: true, raze: false, ruined: false }
   g.towns.push(t)
   for (let n = 0; n < townPawns(t); n++) g.spawnPawn(t)
   g.revealLand(t.land) // the whole island is known from now on
   // the garrison walks to the new settlement (it collapses without a troop beside it)
   for (const u of g.units.filter(q => q.faction === faction && q.state !== 'dead' && q.inTower < 0 && landmassAt(g.world, q.x, q.y) === t.land).sort((a, b) => Math.hypot(a.x - t.x, a.y - t.y) - Math.hypot(b.x - t.x, b.y - t.y)).slice(0, 3)) g.orderMoveTo(u, t.x + (g.rngE.next() - 0.5) * 90, t.y + 50)
   g.say(`${g.label(faction)} planted a settlement`)
+  if (faction > 0) onColony(g, faction, townLabel(g, t))
   g.sounds.push({ name: 'build', x: t.x, y: t.y })
   g.markDirty(); g.recomputeTerritory()
   return t

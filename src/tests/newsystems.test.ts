@@ -135,14 +135,14 @@ describe('settlements', () => {
     trooper.state = 'dead'; g.units = g.units.filter(u => u !== trooper)
     expect(settlementError(g, 0, px(45), px(20))).toMatch(/troop|territory/)
   })
-  it('plants a mini town with its own stockpile, 1 pawn, +2 capacity; home lumber pays, the cargo boat unloads into it', () => {
+  it('plants a mini town with its own stockpile, 1 pawn, +2 capacity; the cargo boat lumber pays first, home pays the rest, the rest of its hold unloads into it', () => {
     const { g, cargo } = setup()
     cargo.load = { lumber: 30, gold: 0, meat: 8 }
     const cap0 = g.cap(0), pawns0 = g.pawns.length
     const s = placeSettlement(g, 0, px(45), px(20))!
     expect(s.kind).toBe('settlement')
-    expect(g.kingdoms[0].lumber).toBe(300)
-    expect(s.store!.lumber).toBe(30); expect(s.store!.meat).toBeCloseTo(Math.min(MEAT.store, MEAT.startStock + 8))
+    expect(g.kingdoms[0].lumber).toBe(330)                                       // (the boat's 30 paid first; home paid the other 70)
+    expect(s.store!.lumber).toBe(0); expect(s.store!.meat).toBeCloseTo(Math.min(MEAT.store, MEAT.startStock + 8))
     expect(cargo.load.lumber).toBe(0)
     expect(g.cap(0)).toBe(cap0 + SETTLE.cap[0]); expect(g.pawns.length).toBe(pawns0 + 1)
     expect(g.ownedTowns(0)).toBe(1)                                              // settlements are not towns

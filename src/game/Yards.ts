@@ -125,17 +125,21 @@ export function bestYardSite(g: Game, t: Town): { x: number; y: number } | null 
 export const atShipyard = (g: Game, b: { x: number; y: number; faction: number; docked: boolean }) => b.docked && !!yardCovering(g, b.faction, b.x, b.y, true) // (an ally's shipyard mends a ship too)
 
 /** Open water beside the shore of the nearest of a kingdom's yards to `from` (where a ship goes to be mended; sailing there moors it), or null. */
-export function yardBerth(g: Game, faction: number, from: { x: number; y: number }): { x: number; y: number } | null {
+export function yardBerth(g: Game, faction: number, from: { x: number; y: number }, avoid: number[] = []): { x: number; y: number } | null {
   const { w, h } = g.world
   let best: { x: number; y: number } | null = null, bd = Infinity
+  // a berth another ship is lying at (or sailing into) is no use: skip it, and any cell the caller found blocked
+  const others = g.boats.filter(o => o !== (from as unknown) && o.hp > 0 && (o.docked || o.docking || o.route.length === 0)).map(o => ({ x: o.route.length >= 2 && !o.docked ? o.route[o.route.length - 2] : o.x, y: o.route.length >= 2 && !o.docked ? o.route[o.route.length - 1] : o.y }))
   for (const q of g.yards) {
     if (q.faction !== faction) continue
     for (const i of yardShoreCells(g, q)) {
       const cx = i % w, cy = (i / w) | 0
       for (const [dx, dy] of N4) {
         const x = cx + dx, y = cy + dy
-        if (x < 0 || y < 0 || x >= w || y >= h || g.world.land[y * w + x] || !g.info.sea[y * w + x]) continue
-        const px = (x + 0.5) * TILE, py = (y + 0.5) * TILE, d = Math.hypot(px - from.x, py - from.y)
+        if (x < 0 || y < 0 || x >= w || y >= h || g.world.land[y * w + x] || !g.info.sea[y * w + x] || avoid.includes(y * w + x)) continue
+        const px = (x + 0.5) * TILE, py = (y + 0.5) * TILE
+        if (others.some(o => Math.hypot(o.x - px, o.y - py) < 2.6 * TILE)) continue
+        const d = Math.hypot(px - from.x, py - from.y)
         if (d < bd) { bd = d; best = { x: px, y: py } }
       }
     }

@@ -197,8 +197,9 @@ export const AI = {
   retreatBelow: 0.1, restUntil: 0.85, freshRestUntil: 0.5, // a unit pulls back to heal only when nearly dead (below 10 %), and then heals to 85 % (new recruits to 50 %) before it returns; pushing at a town with the upper hand it never pulls back
   retreatHp: 0.2, cutOffPatience: 60, // seconds a cut-off assault unit presses on while healthy
   zumReserve: 40, ambushSeconds: 30, blockRushTiles: 16, fleetMinTowns: 3, fleetPerTowns: 3, maxFleet: 5, expandAfter: 150, expandEvery: 45, expandTiles: 90, // AI fleets (large nations) and overseas expansion
+  borderPostTowns: 6, borderPostTiles: 40, postShare: 0.34, // a nation of 6+ towns posts 1-2 troops at each border village (never more than a third of its melee troops, colonies excepted)
   maxBlockSeconds: 25, blockCooldown: 30, garrisonSeconds: 40, // watchdogs: no AI unit stays frozen in a block / hold pose forever
-  navyAfter: 45, navyEvery: 8, maxBoats: 3, // (an invasion wave is 1-3 full infantry boats)
+  navyAfter: 45, navyEvery: 8, maxBoats: 3, maxBoatsPerTowns: 5, maxBoatsCap: 8, bargeMinLoad: 0.75, bargeSmallLoad: 0.5, // (an invasion wave is 3 full barges, plus one more for every 5 towns the nation holds, up to 8; a barge sails with at least 75 % of its seats filled, 50 % when the whole nation has no more troops to give)
    commitMin: 0.5, commitMax: 0.9, minForce: 4, maxZumwalts: 1, navyReserve: 40, loadSeconds: 20, boatRaidMin: 3, // AI navy: starts after 2.5 min of war, keeps 40 lumber spare
   edge: 1.3, warStall: 150, navyShareAtLandWar: 0.3, farLandTiles: 28, respondSeconds: 20, grievanceWindow: 25, dashHp: 0.6, dashGuard: 1, warShare: 0.7, totalShare: 0.8, conflictShare: 0.5, quietWarzone: 8,
 }
@@ -231,8 +232,8 @@ export const TEMPER: Record<Temperament, { aggression: [number, number]; reactMu
   neutral: { aggression: [0.3, 0.6], reactMult: 1, reactFrom: 40, unprovoked: 0, prey: 0.5, reach: 1 },
   imperialist: { aggression: [0.9, 1], reactMult: 4, reactFrom: 0, unprovoked: 0.004, prey: 1, reach: 1.5 },
 }
-/** Mix for AI kingdoms: 30 % pacifist, 25 % imperialist, the rest neutral (every game has at least one imperialist). */
-export const TEMPER_MIX = { pacifist: 0.4, imperialists: [4, 6] as [number, number] } // of the rest, 40 % are pacifist; a game has 4-6 imperialists (never more than half the AI nations)
+/** Mix for AI kingdoms: 80 % of them are imperialist (world domination is the usual goal), the rest split 40 % pacifist / 60 % neutral; every game has at least one imperialist. */
+export const TEMPER_MIX = { pacifist: 0.4, imperialShare: 0.8 }
 
 /**
  * Meat. Each town keeps one sheep: every `period` seconds it is ripe, a pawn walks to it, strikes it a few times and carries `yield` meat home
@@ -243,6 +244,7 @@ export const MEAT = { period: 300, yield: 5, eat: 5, eatPeriod: 600, store: 20, 
 /** A settlement is fragile: `hp` per level (100 / 200 / 300), so a landing party razes it in seconds. AI nations keep `garrison` troops beside it per level. */
 export const SETTLE = {
   cost: 100, upgradeCost: [200, 450], upgradeGold: [0, 5], // lumber (and gold) to reach level 2 and level 3, paid out of the settlement's own store
+  maxTowers: 2, // archer towers a settlement may have (level 2 and up)
   hp: 100, decaySeconds: 120, troopTiles: 6, minTownGapTiles: 8, landTiles: 3,
   radius: [6, 10, 13], weight: [2, 2.5, 3], cap: [2, 6, 10], pawns: [1, 3, 5], maxLevel: 3, shipLevel: 3, // ships can be laid down beside a level 3 settlement
   crateOffset: [60, 40, 40], shipResist: 0.5, repairPawns: 5, repairPerPawn: 40, repairWindow: 6, // ships do half damage; up to 5 pawns mend 40 hp/s each while it is under fire

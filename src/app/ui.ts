@@ -94,3 +94,7 @@ export async function installUiTheme(assets?: Assets) {
     unitIcons.knight = frameIcon(assets.knight[0].Idle)
   }
 }
+
+/** The loaded art, shared so a replay opened from the main menu can draw with it. */
+import type { Assets as SharedAssets } from '../game/AssetLoader'
+export const sharedAssets: { current: SharedAssets | null } = { current: null }

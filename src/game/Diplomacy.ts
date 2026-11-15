@@ -16,6 +16,8 @@ export class Diplomacy {
   /** lost[victim][killer]: units of `victim` killed by `killer` during the current conflict/war. */
   private lost: number[][]
   events: DiplomacyEvent[] = []
+  /** Every relation change since the game last looked (the letters between kingdoms are written from these). */
+  changes: { a: number; b: number; prev: Relation; next: Relation; text?: string }[] = []
   /** Bumped on every relation change, so territory/supply (which depend on alliances) can be recomputed. */
   version = 0
 
@@ -50,6 +52,7 @@ export class Diplomacy {
     if ((r === 'conflict' || r === 'war' || r === 'total') && this.truceActive(a, b, time)) return // (a truce holds: no border incident or joined war reopens it)
     const prev = this.rel[a][b]
     this.rel[a][b] = this.rel[b][a] = r
+    this.changes.push({ a, b, prev, next: r, text })
     this.version++
     this.since[a][b] = this.since[b][a] = time
     if (r === 'conflict' || r === 'war') this.lastIncident[a][b] = this.lastIncident[b][a] = time

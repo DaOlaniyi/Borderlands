@@ -47,6 +47,8 @@ export type Town = {
   upkeepT: number // settlement: seconds until the next meal
   land: number // landmass id the town stands on
   crate: { x: number; y: number } | null // level 2+ settlement: where its storage crates stand
+  name?: string // settlements: the colony's own name ("Haven"); shown as "Haven of <nation>" unless the player renamed it (`renamed`)
+  renamed?: boolean // the player typed this name: it is shown as it stands
   abandoned: boolean // an abandoned settlement belongs to nobody until a unit of any kingdom walks up and claims it
   hitAt: number // sim time the town was last struck by a ship (pawns repair settlements under fire)
   pawnIds: number[]
@@ -134,7 +136,8 @@ export type Unit = {
   kbEx: number
   kbEy: number
   hold: boolean // AI: stay put (bridge unit)
-  aiRole: '' | 'retreat' | 'bridge' | 'dash' | 'garrison' | 'respond' | 'laststand'
+  aiRole: '' | 'retreat' | 'bridge' | 'dash' | 'garrison' | 'respond' | 'laststand' | 'post'
+  post?: number // role 'post': id of the town this unit stands guard beside (see Garrison.ts)
   phase: number // per-unit animation phase
   inTower: number // tower id while garrisoned, otherwise -1
   seq: number // spawn / tower-exit order, used to decide who suffers when over the population cap
@@ -229,6 +232,9 @@ export type Boat = {
   seq: number
   blockedT: number // seconds a landing has been held off by someone's troops on the beach
   stallT: number // seconds a ship with somewhere to go has barely moved (the watchdog re-plans it)
+  standoff?: number // AI Zumwalt: the shore standoff (tiles) its current station was picked with (13 normally, less in a tight channel)
+  shoreSince?: number // AI Zumwalt: when it first found itself inside the shore standoff (see shoreDiscipline)
+  escortOf: number // gunship: id of the Zumwalt it is bonded to as an escort (-1 = unbonded); a bonded squad (1 Zumwalt + 3 gunships) sails and fights as one group
   noDock: boolean // AI warships and staging boats stay afloat: no accidental mooring beside a coast
   dockSince: number // sim time the boat moored (its territory lasts DOCK.lifetime seconds, then it must redock)
   dockSpent: boolean

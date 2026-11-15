@@ -1,17 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Assets } from '../game/AssetLoader'
 import { fitZoom, type Camera } from '../game/Camera'
-import { TILE, type BoatKind, type UnitType, type ZumFocus } from '../game/config'
+import { FACTION_COLORS, TILE, type BoatKind, type UnitType, type ZumFocus } from '../game/config'
 import { Game, type HudSnapshot } from '../game/Game'
 import { Sfx } from '../game/Audio'
 import { orderSail, spawnBoat } from '../game/BoatSystem'
 import { InputController } from '../game/InputController'
+import { packFilm, recordInputs, unpackFilm } from '../game/Film'
+import { packReel, unpackReel } from '../game/Reel'
 import { Renderer } from '../game/Renderer'
-import { restoreGame, serializeGame } from '../game/SaveLoad'
+import { restoreGame, serializeGame, serializeRecording } from '../game/SaveLoad'
 import { DebugPanel } from './DebugPanel'
 import { Hud, type HudActions } from './Hud'
 import type { NewGameParams } from './NewGameScreen'
 import { SavesDialog } from './SavesDialog'
+import { ReplayView } from './ReplayView'
 import { AUTOSAVE_ID, putSave } from './saves'
 
 /** Hollow-circle cursor used by brush selection (30 px radius, matching InputController.BRUSH_PX). */
@@ -51,20 +54,27 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
   const gameRef = useRef<Game | null>(null)
   const camRef = useRef<Camera | null>(null)
   const [game, setGame] = useState<Game | null>(null)
-  const [dialog, setDialog] = useState<null | 'saves' | 'debug'>(() => (import.meta.env.DEV && /[?&]panel=debug/.test(location.search) ? 'debug' : null)) // (dev aid: ?panel=debug opens the War Room at once)
+  const [dialog, setDialog] = useState<null | 'saves' | 'debug' | 'replay'>(() => (import.meta.env.DEV && /[?&]panel=debug/.test(location.search) ? 'debug' : null)) // (dev aid: ?panel=debug opens the War Room at once)
   const [paused, setPaused] = useState(false)
   const dialogRef = useRef(dialog)
   dialogRef.current = dialog
   const apiRef = useRef<HudActions | null>(null)
   const [hud, setHud] = useState<HudSnapshot | null>(null)
+  const tagsRef = useRef<HTMLDivElement>(null)
   const [perf, setPerf] = useState<string | null>(null)
   const [brush, setBrush] = useState(false)
   const showPerf = useRef(import.meta.env.DEV || /[?&]debug/.test(location.search))
 
   useEffect(() => {
     const canvas = canvasRef.current!
-    const game = params.save ? restoreGame(params, params.save.json) : Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, startLumber: params.lumber })
+    const game = params.save ? restoreGame(params, params.save.json, params.save.recording) : Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, startLumber: params.lumber })
     gameRef.current = game; setGame(game)
+    // the literal replay: keyframes every 30 s and a log of the player's commands (a loaded match carries on the film it was saved with)
+    const savedFilm = params.save?.film ? (() => { try { return unpackFilm(params.save!.film!) } catch { return null } })() : null
+    game.rec.startFilm({ seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber }, serializeGame, savedFilm)
+    { const rp = { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber } // the position-recording film: a frame every second
+      if (params.save?.reel) void unpackReel(params.save.reel).then(r => game.rec.startReel(game, rp, r), () => game.rec.startReel(game, rp)); else game.rec.startReel(game, rp) }
+    const cmd = recordInputs(game) // the player's interface goes through this view of the game, so every command is logged
     if (import.meta.env.DEV && !params.save) { const ff = Number(new URLSearchParams(location.search).get('ff')); for (let i = 0; i < ff * 25; i++) game.step(1 / 25) } // dev aid: ?ff=600 fast-forwards ten minutes
     const renderer = new Renderer(assets, game)
     const view = { w: 800, h: 600, dpr: 1 }
@@ -75,7 +85,7 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
     if (params.save?.cam) { Object.assign(cam, params.save.cam); placed = true } // (a loaded match looks where it was saved)
     let dprNow = 2 // internal pixel density (adaptive: lowered when the frame rate stays low, raised again when there is headroom)
     let slow = 0, fast = 0
-    const input = new InputController(game, cam, () => view)
+    const input = new InputController(cmd, cam, () => view)
     const sfx = new Sfx()
 
     const resize = () => {
@@ -114,55 +124,57 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
     const wheel = (e: WheelEvent) => { e.preventDefault(); const p = pos(e); input.wheel(p.x, p.y, e.deltaY, minZoom) }
     const ctxMenu = (e: Event) => e.preventDefault()
     const actions: HudActions = {
-      toggleBlock: () => game.toggleBlockSelection(),
-      join: () => { if (game.selection?.kind === 'units') game.joinUnits(game.selection.ids) },
-      breakSquad: () => game.breakSelection(),
-      setProduce: (t: UnitType, on: boolean) => game.setProduce(0, t, on),
-      placeTower: () => { game.placing = game.placing === 'tower' ? false : 'tower' },
-      placeLot: () => { game.placing = game.placing === 'lot' ? false : 'lot' },
-      placeBoat: (k: BoatKind) => { game.placing = game.placing === k ? false : k },
-      unloadBoat: () => game.unloadSelected(),
-      placeSettlement: () => { game.placing = game.placing === 'settlement' ? false : 'settlement' },
-      placeYard: () => { game.placing = game.placing === 'yard' ? false : 'yard' },
-      placeOutpost: () => { game.placing = game.placing === 'outpost' ? false : 'outpost' },
-      strike: () => { game.strikeMode = !game.strikeMode; game.routePick = null },
-      clearStrikes: () => game.clearStrikes(),
-      adjustWant: (k, d) => game.adjustWant(k, d),
-      beginRoute: () => { game.beginRoutePick(); game.strikeMode = false },
-      cancelRoute: () => game.cancelRoutePick(),
-      clearRoute: () => game.clearRoute(),
-      upgradeTown: id => game.upgradeTown(id),
-      unloadCargo: (k, n) => game.unloadCargo(k, n),
-      abandonSettlement: id => { if (window.confirm('Abandon this settlement?\n\nYou lose your claim on it and everything stored there. The first unit of any kingdom — even a rival — to reach it will claim it.')) game.abandonSettlement(id) },
-      setZumFocus: (f: ZumFocus) => game.setZumwaltFocus(f),
-      toggleRange: () => { game.showRange = !game.showRange },
-      toggleTownProduce: (id: number) => game.toggleTownProduce(id),
-      toggleTownRaze: (id: number) => game.toggleTownRaze(id),
-      cancelBuild: (id: number) => { const t = game.towerById(id); if (t) game.cancelStructure(t) },
-      leaveTower: () => { for (const u of game.selectedUnits()) game.exitTower(u) },
-      alliance: k => game.proposeAlliance(k),
-      breakAlliance: k => game.breakAlliance(k),
-      toggleBlocColor: k => game.toggleBlocColor(k),
-      focusKingdom: k => game.toggleFocus(k),
-      rename: n => game.renameKingdom(0, n),
-      setSpeed: n => { game.speed = n },
-      setHarvest: m => game.setHarvest(0, m),
+      toggleBlock: () => cmd.toggleBlockSelection(),
+      join: () => { if (cmd.selection?.kind === 'units') cmd.joinUnits(cmd.selection.ids) },
+      breakSquad: () => cmd.breakSelection(),
+      setProduce: (t: UnitType, on: boolean) => cmd.setProduce(0, t, on),
+      placeTower: () => { cmd.placing = cmd.placing === 'tower' ? false : 'tower' },
+      placeLot: () => { cmd.placing = cmd.placing === 'lot' ? false : 'lot' },
+      placeBoat: (k: BoatKind) => { cmd.placing = cmd.placing === k ? false : k },
+      unloadBoat: () => cmd.unloadSelected(),
+      placeSettlement: () => { cmd.placing = cmd.placing === 'settlement' ? false : 'settlement' },
+      placeYard: () => { cmd.placing = cmd.placing === 'yard' ? false : 'yard' },
+      placeOutpost: () => { cmd.placing = cmd.placing === 'outpost' ? false : 'outpost' },
+      strike: () => { cmd.strikeMode = !cmd.strikeMode; cmd.routePick = null },
+      clearStrikes: () => cmd.clearStrikes(),
+      adjustWant: (k, d) => cmd.adjustWant(k, d),
+      beginRoute: () => { cmd.beginRoutePick(); cmd.strikeMode = false },
+      cancelRoute: () => cmd.cancelRoutePick(),
+      clearRoute: () => cmd.clearRoute(),
+      upgradeTown: id => cmd.upgradeTown(id),
+      renameTown: (id, n) => cmd.renameTown(id, n),
+      unloadCargo: (k, n) => cmd.unloadCargo(k, n),
+      abandonSettlement: id => { if (window.confirm('Abandon this settlement?\n\nYou lose your claim on it and everything stored there. The first unit of any kingdom — even a rival — to reach it will claim it.')) cmd.abandonSettlement(id) },
+      setZumFocus: (f: ZumFocus) => cmd.setZumwaltFocus(f),
+      toggleRange: () => { cmd.showRange = !cmd.showRange },
+      toggleTownProduce: (id: number) => cmd.toggleTownProduce(id),
+      toggleTownRaze: (id: number) => cmd.toggleTownRaze(id),
+      cancelBuild: (id: number) => { const t = cmd.towerById(id); if (t) cmd.cancelStructure(t) },
+      leaveTower: () => { for (const u of cmd.selectedUnits()) cmd.exitTower(u) },
+      alliance: k => cmd.proposeAlliance(k),
+      breakAlliance: k => cmd.breakAlliance(k),
+      toggleBlocColor: k => cmd.toggleBlocColor(k),
+      focusKingdom: k => cmd.toggleFocus(k),
+      rename: n => cmd.renameKingdom(0, n),
+      setSpeed: n => { cmd.speed = n },
+      setHarvest: m => cmd.setHarvest(0, m),
       exit: onExit,
       openSaves: () => setDialog('saves'),
-      openRamp: () => game.toggleRamp(),
+      openRamp: () => cmd.toggleRamp(),
       openDebug: () => setDialog('debug'),
+      openReplay: () => setDialog('replay'),
     }
     const key = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === 'INPUT') return
       if (e.key === 'Tab') { e.preventDefault(); setDialog(d => (d === 'debug' ? null : 'debug')); return }
       if (dialogRef.current) { if (e.key === 'Escape') setDialog(null); return } // (a dialog is open: the map keys stay quiet)
-      if (e.key === 'b' || e.key === 'B') game.toggleBlockSelection()
+      if (e.key === 'b' || e.key === 'B') cmd.toggleBlockSelection()
       if (e.key === 's' || e.key === 'S') input.stop() // S cancels the order being drawn and stops the selected units
       if (e.key === 'c' || e.key === 'C') { const on = input.toggleBrush(); setBrush(on); canvas.style.cursor = on ? BRUSH_CURSOR : '' }
       if (e.key === 'm' || e.key === 'M') sfx.toggleMute()
-      if (e.key === 'f' || e.key === 'F') game.toggleRamp() // lower / raise the ramp of the selected docked barge
+      if (e.key === 'f' || e.key === 'F') cmd.toggleRamp() // lower / raise the ramp of the selected docked barge
       if (e.key === '`') showPerf.current = !showPerf.current
-      if (e.key === 'Escape') { game.selection = null; game.placing = false; game.strikeMode = false; game.routePick = null; if (input.brush) { input.toggleBrush(); setBrush(false); canvas.style.cursor = '' } }
+      if (e.key === 'Escape') { cmd.selection = null; cmd.placing = false; cmd.strikeMode = false; cmd.routePick = null; if (input.brush) { input.toggleBrush(); setBrush(false); canvas.style.cursor = '' } }
     }
     canvas.addEventListener('pointerdown', down); canvas.addEventListener('pointermove', move); canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up)
     canvas.addEventListener('wheel', wheel, { passive: false }); canvas.addEventListener('contextmenu', ctxMenu); window.addEventListener('keydown', key)
@@ -170,15 +182,51 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
     if (showPerf.current) (window as unknown as Record<string, unknown>).__borderlands = { game, cam, view }
 
     const ctx = canvas.getContext('2d', { alpha: false })!
+    // ---- nation tags: zoomed right out, each kingdom's title, towns and troops hover over it; pointing at one draws its relations as arrows ----
+    const tagBox = tagsRef.current!
+    const tagEls = new Map<number, { el: HTMLDivElement; txt: HTMLElement; x: number; y: number }>()
+    let tagClock = 99
+    const TAG_ZOOM = 1.3 // the tags show over the last stretch of zooming out (zoom within 1.3x of the widest view)
+    const updateTags = (dt: number) => {
+      const show = cam.zoom <= minZoom * TAG_ZOOM
+      if (tagBox.dataset.on !== (show ? '1' : '0')) { tagBox.dataset.on = show ? '1' : '0'; tagBox.style.display = show ? 'block' : 'none'; if (!show && game.focusKingdom !== null && tagBox.dataset.hot === '1') { game.focusKingdom = null; tagBox.dataset.hot = '0' } }
+      if (!show) return
+      tagClock += dt
+      if (tagClock > 0.5) { // positions and counts change slowly: refresh twice a second
+        tagClock = 0
+        for (const k of game.kingdoms) {
+          const mine = game.towns.filter(t => t.owner === k.id && !t.ruined && t.kind !== 'settlement')
+          let rec = tagEls.get(k.id)
+          if (!k.alive || !mine.length) { if (rec) rec.el.style.display = 'none'; continue }
+          if (!rec) {
+            const el = document.createElement('div'); el.className = 'ntag'
+            const dot = document.createElement('i'); dot.style.background = FACTION_COLORS[k.color]
+            const txt = document.createElement('span'); el.append(dot, txt)
+            el.onpointerenter = () => { game.focusKingdom = k.id; tagBox.dataset.hot = '1' }
+            el.onpointerleave = () => { if (game.focusKingdom === k.id) game.focusKingdom = null; tagBox.dataset.hot = '0' }
+            tagBox.appendChild(el); rec = { el, txt, x: 0, y: 0 }; tagEls.set(k.id, rec)
+          }
+          const cx = mine.reduce((n, t) => n + t.x, 0) / mine.length, cy = mine.reduce((n, t) => n + t.y, 0) / mine.length
+          const anchor = mine.reduce((b, t) => (Math.hypot(t.x - cx, t.y - cy) < Math.hypot(b.x - cx, b.y - cy) ? t : b)) // (a town near the middle, so the tag never floats over open sea)
+          rec.x = anchor.x; rec.y = anchor.y; rec.el.style.display = ''
+          rec.el.classList.toggle('me', k.isPlayer)
+          rec.txt.innerHTML = `<b>${game.title(k.id).title} of ${k.name.replace(/[<>&]/g, '')}</b><small>${mine.length} ${mine.length === 1 ? 'town' : 'towns'} · ${game.pop(k.id)} units</small>`
+        }
+      }
+      for (const rec of tagEls.values()) if (rec.el.style.display !== 'none') rec.el.style.transform = `translate(${((rec.x - cam.x) * cam.zoom).toFixed(1)}px, ${((rec.y - cam.y) * cam.zoom - 34).toFixed(1)}px) translate(-50%, -100%)`
+    }
     let raf = 0, last = performance.now(), hudClock = 0, frames = 0, fpsClock = 0, fps = 0
     const loop = (now: number) => {
       const dt = (now - last) / 1000; last = now
       const alpha = game.advance(dt)
+      game.rec.reelTick(game)
+      game.rec.keyTick(game) // (between simulation steps: a keyframe holds exactly what a save would)
       if (game.sounds.length) { // play effects near the camera, quieter with distance
         const cx = cam.x + view.w / cam.zoom / 2, cy = cam.y + view.h / cam.zoom / 2, reach = Math.max(view.w, view.h) / cam.zoom * 0.75
         for (const s of game.sounds) sfx.play(s.name, Math.max(0, 1 - Math.hypot(s.x - cx, s.y - cy) / reach))
         game.sounds.length = 0
       }
+      updateTags(dt)
       renderer.draw(ctx, view.w, view.h, view.dpr, cam, alpha, { draft: input.draft, hoverTree: input.hoverTree, showPerf: showPerf.current, hover: input.hover })
       frames++; fpsClock += dt; hudClock += dt
       if (fpsClock >= 0.5) {
@@ -211,7 +259,7 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
 
   // the saves dialog always freezes the match; the War Room only when asked to
   useEffect(() => {
-    if (!game || !(dialog === 'saves' || (dialog === 'debug' && paused))) return
+    if (!game || !(dialog === 'saves' || dialog === 'replay' || (dialog === 'debug' && paused))) return
     const prev = game.speed || 1
     game.speed = 0
     return () => { game.speed = prev }
@@ -225,8 +273,10 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
   return (
     <div className="stage">
       <canvas ref={canvasRef} aria-label="Borderlands map" />
+      <div ref={tagsRef} className="nation-tags" style={{ display: 'none' }} />
       {hud && apiRef.current && <Hud hud={hud} perf={perf} actions={apiRef.current} brush={brush} />}
       {game && dialog === 'debug' && <DebugPanel game={game} paused={paused} onPause={setPaused} onClose={() => setDialog(null)} />}
+      {game && dialog === 'replay' && <ReplayView data={game.rec.data} film={game.rec.film} filmEndT={game.time} reel={game.rec.reel} title={`${game.kingdoms[0].name} · live game`} onClose={() => setDialog(null)} />}
       {game && dialog === 'saves' && <SavesDialog defaultName={`${game.kingdoms[0].name} · ${Math.floor(game.time / 60)} min`} onSave={saveFromDialog} onLoad={id => { setDialog(null); onLoad(id) }} onClose={() => setDialog(null)} />}
     </div>
   )
@@ -238,5 +288,5 @@ async function saveGame(game: Game, cam: Camera, params: NewGameParams, name: st
     id, name, auto, savedAt: new Date().toISOString(), cam: { x: cam.x, y: cam.y, zoom: cam.zoom },
     params: { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber },
     gameTime: game.time, kingdomName: game.kingdoms[0].name, towns: game.ownedTowns(0), kingdoms: game.kingdoms.length,
-  }, serializeGame(game))
+  }, serializeGame(game), serializeRecording(game), game.rec.film ? await packFilm({ ...game.rec.film, endT: game.time }) : undefined, game.rec.reel ? await packReel(game.rec.reel) : undefined)
 }

@@ -56,7 +56,7 @@ export function spawnBoat(g: Game, faction: number, kind: BoatKind, x: number, y
     id: g.allocId(), kind, faction, x, y, px: x, py: y, vx: 0, vy: 0, hp: st.hp, maxHp: st.hp, route: [], routeIdx: 0, stuck: 0, chkX: x, chkY: y,
     facing: 1, dir: 'up', docked: false, docking: false, dockT: 0, dockBlocked: false, side: 'E', flip: false, turnT: 0, muzzle: 0, target: null, scanT: 0, hpSeen: 0, evadeT: 0, fireT: 0, open: false, retaliating: false,
     dockCell: -1, cargo: [], cap: typeof st.cap === 'number' ? st.cap : 0, focus: 'ships', volleyCd: 1.5, shotsLeft: 0, shotT: 0, flash: 0, seq: g.nextSeq(),
-    lockT: 0, lockKey: '', strike: null, load: emptyStock(), want: emptyStock(), unload: emptyStock(), trade: null, gunCd: 1, loading: 0, blockedT: 0, stallT: 0, noDock: false, dockSince: -1, dockSpent: false,
+    lockT: 0, lockKey: '', strike: null, load: emptyStock(), want: emptyStock(), unload: emptyStock(), trade: null, gunCd: 1, loading: 0, blockedT: 0, stallT: 0, escortOf: -1, noDock: false, dockSince: -1, dockSpent: false,
   }
   g.boats.push(b)
   const m = mooringNear(g, x, y, DOCK.snapTiles)
@@ -179,10 +179,20 @@ function boarding(g: Game, b: Boat) {
   let used = cargoCount(g, b)
   for (const u of g.units) {
     if (u.boardBoat !== b.id || u.state === 'dead' || u.inTower >= 0) continue
-    if (Math.hypot(u.x - b.x, u.y - b.y) > TILE * 2) { // walk to the shore beside the ship
-      if (u.routeIdx >= u.route.length / 2 && b.dockCell >= 0 && g.tickCount % 25 === 0) g.orderMoveTo(u, (b.dockCell % g.world.w + 0.5) * TILE, (Math.floor(b.dockCell / g.world.w) + 0.5) * TILE)
+    // a crowd cannot all stand at the dock cell: anyone close enough to the hull (more for a long barge) climbs aboard
+    const reach = TILE * Math.min(5, Math.max(2, shipLength(b.kind) / TILE) + 1)
+    if (Math.hypot(u.x - b.x, u.y - b.y) > reach) {
+      const w = g.boardWalk.get(u.id) ?? { since: g.time, last: -99 }; g.boardWalk.set(u.id, w)
+      if (g.time - w.since > 60) { // a walker that has not arrived in a minute gives up (it cannot reach this boat); the boat's owner finds others
+        u.boardBoat = -1; g.boardWalk.delete(u.id)
+        if (u.aiRole === 'respond') { u.aiRole = ''; g.aiMemo.respond.delete(u.id) }
+        continue
+      }
+      // one that has stopped short is sent again, but only every few seconds
+      if (u.state === 'idle' && u.routeIdx >= u.route.length / 2 && b.dockCell >= 0 && g.time - w.last > 4) { w.last = g.time; g.orderMoveTo(u, (b.dockCell % g.world.w + 0.5) * TILE, (Math.floor(b.dockCell / g.world.w) + 0.5) * TILE) }
       continue
     }
+    g.boardWalk.delete(u.id)
     if (used + u.count > b.cap) { u.boardBoat = -1; g.say('The ship is full'); continue }
     used += u.count
     if (u.aiRole === 'respond') { u.aiRole = ''; g.aiMemo.respond.delete(u.id) } // aboard: the 'go to the boat' job is done
@@ -261,8 +271,15 @@ function pickShipTarget(g: Game, b: Boat, range: number): Target | null {
   const zum = zumwaltInRange(g, b, range)
   if (zum) return zum
   const foes = g.boats.filter(o => o !== b && o.hp > 0 && g.hostile(b.faction, o.faction))
-  const cargo = nearestIn(b, range, foes.filter(o => o.kind === 'cargo'), o => ({ kind: 'boat', id: o.id, x: o.x, y: o.y }))
-  return cargo ?? nearestIn(b, range, foes, o => ({ kind: 'boat', id: o.id, x: o.x, y: o.y }))
+  const asBoat = (o: Boat): Target => ({ kind: 'boat', id: o.id, x: o.x, y: o.y })
+  // transports first (a barge or infantry boat carries an invasion; a cargo boat carries the supplies), then any warship, then ships and yards still under construction
+  const barge = nearestIn(b, range, foes.filter(o => o.kind === 'barge' || o.kind === 'boat'), asBoat)
+  if (barge) return barge
+  const cargo = nearestIn(b, range, foes.filter(o => o.kind === 'cargo'), asBoat)
+  if (cargo) return cargo
+  const ship = nearestIn(b, range, foes, asBoat)
+  if (ship) return ship
+  return nearestIn(b, range, g.towers.filter(t => !t.built && g.hostile(b.faction, t.faction) && (t.kind === 'boat' || t.kind === 'barge' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'zumwalt')), t => ({ kind: 'tower', id: t.id, x: t.x, y: t.y }))
 }
 
 function pickTarget(g: Game, b: Boat): Target | null {
@@ -621,7 +638,7 @@ function seaWithin(g: Game, b: Boat, x: number, y: number, reach: number): { x: 
 }
 
 /** Open sea within `reach` tiles of (x, y) that is clear of hostile shore and tower arrows, nearest to `from` (optionally also within `range` px of `near`). */
-function safeWater(g: Game, faction: number, x: number, y: number, reach: number, near?: { x: number; y: number; range: number }): { x: number; y: number } | null {
+function safeWater(g: Game, faction: number, x: number, y: number, reach: number, near?: { x: number; y: number; range: number }, stand = SHORE_STANDOFF): { x: number; y: number } | null {
   const { w, h } = g.world, cx = Math.floor(x / TILE), cy = Math.floor(y / TILE), r = Math.ceil(reach)
   let best: { x: number; y: number } | null = null, bd = Infinity
   for (let yy = Math.max(0, cy - r); yy <= Math.min(h - 1, cy + r); yy += 2) for (let xx = Math.max(0, cx - r); xx <= Math.min(w - 1, cx + r); xx += 2) {
@@ -629,7 +646,7 @@ function safeWater(g: Game, faction: number, x: number, y: number, reach: number
     const px = (xx + 0.5) * TILE, py = (yy + 0.5) * TILE
     if (near && Math.hypot(px - near.x, py - near.y) > near.range) continue
     const d = Math.hypot(px - x, py - y)
-    if (d >= bd || hostileShoreNear(g, faction, px, py) || towerShadow(g, faction, px, py)) continue
+    if (d >= bd || hostileShoreNear(g, faction, px, py, stand) || towerShadow(g, faction, px, py)) continue
     bd = d; best = { x: px, y: py }
   }
   return best
@@ -644,16 +661,24 @@ function shoreDiscipline(g: Game, b: Boat) {
   if (g.tickCount % 12 !== (b.id % 12)) return
   const hurt = b.hp < b.hpSeen - 1
   b.hpSeen = b.hp
-  const tooClose = hostileShoreNear(g, b.faction, b.x, b.y, SHORE_STANDOFF - 1.5)
+  const tooClose = hostileShoreNear(g, b.faction, b.x, b.y, (b.standoff ?? SHORE_STANDOFF) - 1.5)
+  if (!tooClose && !(b.hp < b.hpSeen)) b.shoreSince = undefined // (clear of the shore: the hemmed-in timer resets)
   const reachPx = UNIT.archer.range * 1.5 + 2 * TILE
   const shot = hurt && (!!towerShadow(g, b.faction, b.x, b.y, 14 * TILE) || g.units.some(u => u.state !== 'dead' && g.hostile(b.faction, u.faction) && Math.hypot(u.x - b.x, u.y - b.y) < reachPx))
   if (!tooClose && !shot) return
-  const spot = safeWater(g, b.faction, b.x, b.y, 22)
+  // a soft rule: a Zumwalt passing through (a strait, a channel between islands) is never turned back by it; the standoff applies when it is idle, shelling, or badly hurt
+  const transiting = b.route.length > 0 && b.routeIdx < b.route.length / 2 && !evading(g, b)
+  if (transiting && b.hp > b.maxHp * 0.4) return
+  b.shoreSince = b.shoreSince ?? g.time
+  const hemmed = g.time - b.shoreSince
+  if (hemmed > 20 && b.hp > b.maxHp * 0.6) { if (hemmed > 60) b.shoreSince = g.time; return } // (hemmed in for 20 s with nowhere better: it holds its ground for 40 s rather than shuttle back and forth)
+  const spot = safeWater(g, b.faction, b.x, b.y, 22, undefined, b.standoff ?? SHORE_STANDOFF)
   if (!spot) return
   const man = b.strike && b.strike.kind !== 'ground' ? manualTarget(g, b) : null
   if (man && Math.hypot(man.x - spot.x, man.y - spot.y) > ZUMWALT.rangeTiles * TILE) { b.strike = null; b.target = null } // too far inland to shell from safe water
   if (Math.hypot(spot.x - b.x, spot.y - b.y) > 1.5 * TILE) { b.loading = 3; orderSail(g, b, [spot.x, spot.y]) }
 }
+
 
 /** Pick a target now and then, swing the broadside toward it, lock on (4 s for a new target) and fire bursts once it faces the right way. */
 function aimAndFire(g: Game, b: Boat, dt: number, sailing: boolean) {

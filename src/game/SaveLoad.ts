@@ -1,5 +1,6 @@
 import { Game } from './Game'
 import { ensureStats } from './Stats'
+import { Recorder, type RecData } from './Recorder'
 
 /**
  * Saving a match: the world is regenerated from its seed on load (it never changes apart from the trees), then every field of the Game
@@ -10,7 +11,7 @@ export const SAVE_VERSION = 1
 export type SaveParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number }
 
 /** Game fields that are derived (rebuilt on load) or hold functions / generators. */
-const SKIP = new Set(['world', 'info', 'unitHash', 'unitMap', 'ux', 'uy', 'rng', 'rngE', 'sounds', 'fx', 'projectiles', 'simMs', 'territoryMs'])
+const SKIP = new Set(['world', 'info', 'unitHash', 'unitMap', 'ux', 'uy', 'rng', 'rngE', 'sounds', 'fx', 'projectiles', 'simMs', 'territoryMs', 'rec'])
 
 const toB64 = (a: ArrayBufferView) => {
   const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength)
@@ -48,7 +49,39 @@ export function serializeGame(g: Game): string {
   return JSON.stringify({ v: SAVE_VERSION, rng: g.rng.state(), rngE: g.rngE.state(), trees, fields }, replacer)
 }
 
-export function restoreGame(params: SaveParams, json: string): Game {
+/** The recording as text (typed arrays encoded like the save); stored beside the save, not inside it. */
+export const serializeRecording = (g: Game): string => JSON.stringify(g.rec.data, replacer)
+export const parseRecording = (json: string): RecData => JSON.parse(json, reviver) as RecData
+
+const pristineTrees = new WeakMap<Game, [boolean, number, number, number | undefined][]>()
+/**
+ * Lay a save over a game that already exists (the replay's second game): the world stays, everything else is replaced, the trees are put back to how a fresh
+ * forest stands before the save's felled ones are applied. Much cheaper than building a new game for every seek.
+ */
+export function applySave(g: Game, json: string) {
+  const data = JSON.parse(json, reviver) as { v: number; rng: number; rngE: number; trees: number[][]; fields: Record<string, unknown> }
+  if (data.v !== SAVE_VERSION) throw new Error(`This save was made by a different version of the game (v${data.v}).`)
+  let base = pristineTrees.get(g)
+  if (!base) { base = g.world.trees.map(t => [t.chopped, t.progress, t.claimedBy, t.regrowAt] as [boolean, number, number, number | undefined]); pristineTrees.set(g, base) }
+  g.world.trees.forEach((t, i) => { const b = base![i]; t.chopped = b[0]; t.progress = b[1]; t.claimedBy = b[2]; t.regrowAt = b[3] })
+  const target = g as unknown as Record<string, unknown>
+  for (const [key, val] of Object.entries(data.fields)) {
+    if (key === 'diplomacy') Object.assign(g.diplomacy, val)
+    else target[key] = val
+  }
+  for (const [i, chopped, progress, claimedBy, regrowAt] of data.trees) {
+    const t = g.world.trees[i]; if (!t) continue
+    t.chopped = chopped === 1; t.progress = progress; t.claimedBy = claimedBy; t.regrowAt = regrowAt >= 0 ? regrowAt : undefined
+  }
+  g.rng.setState(data.rng); g.rngE.setState(data.rngE)
+  target.unitMap = new Map(g.units.map(u => [u.id, u]))
+  g.sounds = []; g.fx = []; g.projectiles = []
+  ensureStats(g.stats)
+  for (const b of g.boats) b.open ??= false
+  g.refreshHash()
+}
+
+export function restoreGame(params: SaveParams, json: string, recording?: string): Game {
   const data = JSON.parse(json, reviver) as { v: number; rng: number; rngE: number; trees: number[][]; fields: Record<string, unknown> }
   if (data.v !== SAVE_VERSION) throw new Error(`This save was made by a different version of the game (v${data.v}).`)
   const g = Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, startLumber: params.lumber })
@@ -68,5 +101,7 @@ export function restoreGame(params: SaveParams, json: string): Game {
   for (const b of g.boats) b.open ??= false
   for (const k of g.kingdoms) { k.produce.knight ??= k.isPlayer ? false : true; k.weights.knight ??= k.isPlayer ? 1 : 1.2 } // (saves from before the knight)
   g.refreshHash()
+  if (recording) { try { g.rec = new Recorder(parseRecording(recording)); g.rec.next = g.time } catch { /* an unreadable recording starts over */ } }
+  else g.rec.next = g.time // (a save from before recordings: it starts from here)
   return g
 }

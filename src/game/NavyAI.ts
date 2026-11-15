@@ -1,6 +1,6 @@
 import { aiNote } from './Stats'
 import { navalBudget, yardBerth } from './Yards'
-import { evading, hostileShoreNear, isWaterCell, mooringNear, orderSail, setStrikeOn, towerShadow } from './BoatSystem'
+import { evading, hostileShoreNear, SHORE_STANDOFF, isWaterCell, mooringNear, orderSail, setStrikeOn, towerShadow } from './BoatSystem'
 import { GUNSHIP, TILE, ZUMWALT } from './config'
 import type { Game } from './Game'
 import type { Boat, Town } from './types'
@@ -12,7 +12,25 @@ const isArmedBoat = (b: Boat) => b.kind === 'zumwalt' || b.kind === 'gunship'
 const STAND = { zumwaltShip: 13, zumwaltBuilding: 9, gunship: 8 }
 
 /** How far (tiles) its escorts may lag before a Zumwalt waits for them (gunships are a little slower, so they trail it). */
-const ESCORT_TILES = 22
+const ESCORT_TILES = 18
+/** A squad: one Zumwalt and this many bonded gunships. A Zumwalt sets out on a sortie only with the full squad (or two, when no more can be built or after a long wait), and never goes on alone. */
+const SQUAD = 3
+/** How far (tiles) a Zumwalt reaches out for a hostile ship it was not sent after. */
+const HUNT_TILES = 55
+
+/**
+ * How many bonded gunships a Zumwalt wants beside it before it goes to (x, y): it depends on who is waiting there. An enemy Zumwalt, or three or
+ * more gunships, call for the whole squad; two gunships for one escort; a lone gunship, cargo boats, barges, or an empty sea for none (a Zumwalt
+ * is more than a match for a single gunship). A garrisoned tower there asks for one escort as well. A hurt Zumwalt wants one more.
+ */
+export function escortNeed(g: Game, k: number, x: number, y: number, hpFrac = 1): number {
+  let gun = 0, zum = 0
+  for (const e of g.boats) if (e.hp > 0 && g.hostile(k, e.faction) && Math.hypot(e.x - x, e.y - y) < 28 * TILE) { if (e.kind === 'gunship') gun++; else if (e.kind === 'zumwalt') zum++ }
+  let need = zum > 0 || gun >= 3 ? 3 : gun === 2 ? 2 : gun === 1 ? (hpFrac < 0.6 ? 1 : 0) : 0
+  if (need < 1 && towerShadow(g, k, x, y, 14 * TILE)) need = 1
+  if (hpFrac < 0.5) need = Math.min(3, need + 1)
+  return need
+}
 
 /** Hostile warships close to one of the kingdom's towns or settlements. */
 export function navalThreats(g: Game, k: number, home: Town[]): Boat[] {
@@ -34,26 +52,31 @@ export function navalPicture(g: Game, k: number, target: Town) {
 /** Open sea (not a lake, not beside a coast where a ship would moor) at a given world point. */
 const oceanAt = (g: Game, x: number, y: number) => { const cx = Math.floor(x / TILE), cy = Math.floor(y / TILE); return isWaterCell(g, cx, cy) && !!g.info.sea[cy * g.world.w + cx] && !mooringNear(g, x, y, 2.5) }
 
-function stationNear(g: Game, z: Boat, target: Town, mates: Boat[]): { x: number; y: number } | null {
+function stationNear(g: Game, z: Boat, target: Town, mates: Boat[]): { x: number; y: number; stand: number } | null {
   const crowded = (x: number, y: number) => mates.some(m => m !== z && (Math.hypot(m.x - x, m.y - y) < 4 * TILE || (m.route.length > 1 && Math.hypot(m.route[m.route.length - 2] - x, m.route[m.route.length - 1] - y) < 4 * TILE)))
-  let best: { x: number; y: number } | null = null, bd = Infinity
-  for (let a = 0; a < 24; a++) {
-    const ang = (a / 24) * Math.PI * 2
-    for (const r of [14, 17, 20]) { // (a Zumwalt keeps clear of the enemy shore: it shells from afar)
-      const x = target.x + Math.cos(ang) * r * TILE, y = target.y + Math.sin(ang) * r * TILE
-      if (!oceanAt(g, x, y) || crowded(x, y) || hostileShoreNear(g, z.faction, x, y) || towerShadow(g, z.faction, x, y)) continue // (never park inside a garrisoned tower's reach)
-      const d = Math.hypot(x - z.x, y - z.y)
-      if (d < bd) { bd = d; best = { x, y } }
+  let best: { x: number; y: number; stand: number } | null = null
+  // the full standoff first (a Zumwalt keeps clear of the enemy shore and shells from afar); only when no such station exists does it settle nearer, in a tight channel
+  for (const [radii, stand] of [[[14, 17, 20], SHORE_STANDOFF], [[11, 13], 9], [[8, 10], 6]] as [number[], number][]) {
+    let bd = Infinity
+    for (let a = 0; a < 24; a++) {
+      const ang = (a / 24) * Math.PI * 2
+      for (const r of radii) {
+        const x = target.x + Math.cos(ang) * r * TILE, y = target.y + Math.sin(ang) * r * TILE
+        if (!oceanAt(g, x, y) || crowded(x, y) || hostileShoreNear(g, z.faction, x, y, stand) || towerShadow(g, z.faction, x, y)) continue // (never park inside a garrisoned tower's reach)
+        const d = Math.hypot(x - z.x, y - z.y)
+        if (d < bd) { bd = d; best = { x, y, stand } }
+      }
     }
+    if (best) return best
   }
   if (!best) { // an inland target: the open-water point nearest to it that is free
     const cx = Math.floor(target.x / TILE), cy = Math.floor(target.y / TILE)
     let bt = Infinity
     for (let yy = cy - 24; yy <= cy + 24; yy++) for (let xx = cx - 24; xx <= cx + 24; xx++) {
       const x = (xx + 0.5) * TILE, y = (yy + 0.5) * TILE
-      if (!oceanAt(g, x, y) || crowded(x, y) || hostileShoreNear(g, z.faction, x, y)) continue
+      if (!oceanAt(g, x, y) || crowded(x, y) || hostileShoreNear(g, z.faction, x, y, 6) || towerShadow(g, z.faction, x, y)) continue
       const dt = Math.hypot(x - target.x, y - target.y)
-      if (dt < bt) { bt = dt; best = { x, y } }
+      if (dt < bt) { bt = dt; best = { x, y, stand: 6 } }
     }
   }
   return best
@@ -87,6 +110,19 @@ function flankSlot(z: Boat, index: number, heading: { x: number; y: number }): {
   if (slot === 1) return { x: z.x - px * 3.3 * TILE, y: z.y - py * 3.3 * TILE }
   return { x: z.x - hx * 4 * TILE, y: z.y - hy * 4 * TILE }
 }
+/** A flank slot that is open water: the slot itself, else the nearest water ring point around the Zumwalt, else the Zumwalt's own position (the escort sits beside it). */
+function openSlot(g: Game, z: Boat, slot: { x: number; y: number }): { x: number; y: number } {
+  const water = (p: { x: number; y: number }) => isWaterCell(g, Math.floor(p.x / TILE), Math.floor(p.y / TILE))
+  if (water(slot)) return slot
+  let best: { x: number; y: number } | null = null, bd = Infinity
+  for (let a = 0; a < 16; a++) for (const r of [2.5, 4, 6]) {
+    const p = { x: z.x + Math.cos((a / 16) * Math.PI * 2) * r * TILE, y: z.y + Math.sin((a / 16) * Math.PI * 2) * r * TILE }
+    if (!water(p)) continue
+    const d = Math.hypot(p.x - slot.x, p.y - slot.y)
+    if (d < bd) { bd = d; best = p }
+  }
+  return best ?? { x: z.x, y: z.y }
+}
 const headingOf = (z: Boat, towards: { x: number; y: number } | null) => {
   if (z.route.length >= 2 && z.routeIdx < z.route.length / 2) return { x: z.route[z.routeIdx * 2] - z.x, y: z.route[z.routeIdx * 2 + 1] - z.y }
   if (Math.hypot(z.vx, z.vy) > 4) return { x: z.vx, y: z.vy }
@@ -104,11 +140,24 @@ const headingOf = (z: Boat, towards: { x: number; y: number } | null) => {
 export function manageNavalForces(g: Game, k: number, target: Town | null, home: Town[]) {
   const zums = g.boats.filter(b => b.faction === k && b.kind === 'zumwalt' && b.hp > 0)
   const guns = g.boats.filter(b => b.faction === k && b.kind === 'gunship' && b.hp > 0)
-  const threats = navalThreats(g, k, home) // (known even to a nation with no ships: it will build some)
-  if (threats.length) g.navalThreat.add(k); else g.navalThreat.delete(k)
+  const homeThreats = navalThreats(g, k, home) // (known even to a nation with no ships: it will build some)
+  if (homeThreats.length) g.navalThreat.add(k); else g.navalThreat.delete(k)
+  // ...and warships anywhere that are hitting something of ours or an ally's (a cargo boat, a coast, an outpost far from home): the fleet answers those too
+  const ownerOf = (t: NonNullable<Boat['target']>) => t.kind === 'boat' ? g.boatById(t.id)?.faction : t.kind === 'tower' ? g.towerById(t.id)?.faction : t.kind === 'town' ? g.towns[t.id]?.owner : t.kind === 'unit' ? g.unitById(t.id)?.faction : undefined
+  const refShip = zums[0] ?? guns[0]
+  const attackers = refShip ? g.boats.filter(e => e.hp > 0 && isArmedBoat(e) && g.hostile(k, e.faction) && e.target && (() => { const f = ownerOf(e.target!); return f !== undefined && f >= 0 && (f === k || g.diplomacy.allied(k, f)) })() && tiles(e, refShip) < 95) : []
+  const threats = [...homeThreats, ...attackers.filter(a => !homeThreats.includes(a))]
   if (!zums.length && !guns.length) return
   const M = g.aiMemo.ship
   const lead = zums[0] ?? guns[0]
+
+  // ---- squads: every gunship is bonded to one Zumwalt (the one with the fewest escorts, then the nearest) until that Zumwalt is lost ----
+  for (const gb of guns) if ((gb.escortOf ?? -1) >= 0 && !zums.some(z => z.id === gb.escortOf)) gb.escortOf = -1
+  const bondedOf = (z: Boat) => guns.filter(q => q.escortOf === z.id).sort((a, b) => a.id - b.id)
+  for (const gb of guns.filter(q => (q.escortOf ?? -1) < 0).sort((a, b) => a.id - b.id)) {
+    const z = zums.filter(q => bondedOf(q).length < SQUAD).sort((p, q) => bondedOf(p).length - bondedOf(q).length || tiles(p, gb) - tiles(q, gb))[0]
+    if (z) gb.escortOf = z.id
+  }
 
   for (const b of [...zums, ...guns]) b.noDock = !(b.kind === 'zumwalt' && M.get(b.id)?.phase === 'return') // AI warships stay afloat (no accidental mooring), except a Zumwalt going to be mended
   // ---- a Zumwalt that is burning (badly hurt) with no mission on goes to a shipyard berth to be mended, and goes back to station once whole ----
@@ -128,8 +177,11 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
   const mending = (z: Boat) => M.get(z.id)?.phase === 'return'
   // cover: two gunships within reach; a nation that cannot get gunships (naval point budget used up, or no lumber) lets its Zumwalts cover each other in groups, rather than sit idle for ever
   const cantEscort = guns.length < 2 && zums.length >= 2 && (!navalBudget(g, k).canGunship || g.kingdoms[k].lumber < GUNSHIP.cost)
-  const cover = (z: Boat) => guns.filter(q => tiles(q, z) < ESCORT_TILES).length + (cantEscort ? 2 * zums.filter(o => o !== z && !mending(o) && tiles(o, z) < ESCORT_TILES).length : 0)
+  const cover = (z: Boat) => bondedOf(z).filter(q => tiles(q, z) < ESCORT_TILES).length + (cantEscort ? 2 * zums.filter(o => o !== z && !mending(o) && tiles(o, z) < ESCORT_TILES).length : 0)
   const escortedZ = (z: Boat) => !mending(z) && cover(z) >= 2
+  const needAt = (z: Boat, x: number, y: number) => escortNeed(g, k, x, y, z.hp / z.maxHp)
+  const okAt = (z: Boat, x: number, y: number) => !mending(z) && cover(z) >= needAt(z, x, y) // (escorted enough for what waits THERE: a lone gunship raiding cargo needs no squad)
+  for (const z of zums) if (z.strike && ((z.strike.kind === 'boat' && !g.boatById(z.strike.id)) || (z.strike.kind === 'tower' && !g.towerById(z.strike.id)))) { z.strike = null; z.target = null }
   // ---- 1. defence ----
   let engaged: Boat | null = null
   if (threats.length) {
@@ -138,6 +190,7 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     engaged = threats.slice().sort((a, b) => (closeToOurs(a) < 14 ? 0 : 1) - (closeToOurs(b) < 14 ? 0 : 1) || (b.kind === 'zumwalt' ? 1 : 0) - (a.kind === 'zumwalt' ? 1 : 0) || tiles(a, lead) - tiles(b, lead))[0]
     for (const b of [...zums, ...guns]) { // each ship takes the attacker nearest to IT when one is on top of it
       const mine = threats.filter(e => tiles(e, b) < 12).sort((p, q) => tiles(p, b) - tiles(q, b))[0] ?? engaged
+      if (b.kind === 'zumwalt' && !okAt(b, mine.x, mine.y) && tiles(mine, b) > 14) continue // (it does not charge ahead of its squad into a real fight; a weak raider needs no squad)
       if (!b.strike || b.strike.kind !== 'boat' || !g.boatById(b.strike.id) || (mine.id !== b.strike.id && tiles(mine, b) < 8 && tiles(b, { x: b.strike.x, y: b.strike.y }) > 12)) setStrikeOn(b, 'boat', mine.id, mine.x, mine.y)
     }
   }
@@ -155,10 +208,10 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
 
   // ---- 2. campaign ----
   let squadronGoal: { x: number; y: number } | null = null
-  if (!engaged) for (const z of zums) if (!escortedZ(z) && z.strike && z.strike.kind !== 'ground') { z.strike = null; z.target = null } // (no sorties alone: whatever it was after, it lets go until the escorts are with it)
+  if (!engaged) for (const z of zums) if (z.strike && z.strike.kind !== 'ground' && !okAt(z, z.strike.x, z.strike.y)) { z.strike = null; z.target = null } // (no sorties alone: whatever it was after, it lets go until the escorts are with it)
   if (!engaged && target && !target.ruined) {
     const pic = navalPicture(g, k, target)
-    const zumsGo = zums.filter(escortedZ) // (only the escorted ones are given the mission)
+    const zumsGo = zums.filter(z => okAt(z, target.x, target.y)) // (only the ones with enough escort for what waits there are given the mission)
     const nearestTo = <T extends { x: number; y: number }>(list: T[]) => list.slice().sort((a, b) => tiles(a, lead) - tiles(b, lead))[0]
     if (pic.ships.length) { // naval dominance: sink the enemy navy first, everything we have on it
       const e = nearestTo(pic.ships)
@@ -175,6 +228,20 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     squadronGoal = { x: target.x, y: target.y }
   }
 
+  // ---- 2b. hunting: a Zumwalt with nothing else to do goes after hostile ships within reach: invasion barges and troop boats first, then cargo boats, then gunships;
+  //      an enemy Zumwalt only with its squad. How many escorts it takes depends on who waits there (escortNeed): a lone gunship raiding a cargo boat gets a Zumwalt even with no escort ----
+  if (!engaged) for (const z of zums) {
+    if (mending(z) || evading(g, z) || z.strike || (z.route.length > 0 && z.routeIdx < z.route.length / 2)) continue
+    const rank = (e: Boat) => (e.kind === 'barge' ? 0 : e.kind === 'boat' ? 1 : e.kind === 'cargo' ? 2 : e.kind === 'gunship' ? 3 : 5)
+    const prey = g.boats.filter(e => e.hp > 0 && g.hostile(k, e.faction) && tiles(e, z) < HUNT_TILES && okAt(z, e.x, e.y))
+      .sort((a, b) => (rank(a) + tiles(a, z) / 15 - (a.target && (() => { const f = ownerOf(a.target!); return f !== undefined && f >= 0 && (f === k || g.diplomacy.allied(k, f)) })() ? 4 : 0)) - (rank(b) + tiles(b, z) / 15 - (b.target && (() => { const f = ownerOf(b.target!); return f !== undefined && f >= 0 && (f === k || g.diplomacy.allied(k, f)) })() ? 4 : 0)))[0]
+    if (!prey) continue
+    setStrikeOn(z, 'boat', prey.id, prey.x, prey.y)
+    for (const gb of bondedOf(z)) if (!gb.strike && tiles(gb, z) < ESCORT_TILES) setStrikeOn(gb, 'boat', prey.id, prey.x, prey.y) // (the squad goes in with it)
+    aiNote(g, k, 'escort', 'ok', `Zumwalt hunting a ${prey.kind} (${bondedOf(z).filter(q => tiles(q, z) < ESCORT_TILES).length} escorts, ${needAt(z, prey.x, prey.y)} needed)`)
+  }
+  if ([...zums, ...guns].some(b => b.target || b.strike)) g.fleetBusy.set(k, g.time) // (the campaign target is rotated when the fleet has had nothing to shoot at for a while)
+
   // ---- Zumwalt movement: go to a station off the target, but only WITH an escort (at least two gunships alongside); alone, it waits at its berth ----
   for (const z of zums) {
     let s = M.get(z.id)
@@ -184,23 +251,27 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     if (z.strike && z.strike.kind !== 'ground') continue // engaging a chosen target: the approach logic sails it
     if (!squadronGoal || engaged) continue
     const guards = cover(z)
-    if (z.route.length > 0 && z.routeIdx < z.route.length / 2) { // under way: it waits (route dropped, no turning back) while fewer than two escorts are within reach, and sets off again when they catch up
-      if (guards < 2) { z.route = []; z.routeIdx = 0; s.since = g.time - 3 }
+    const waited = s.dockSince !== undefined && s.dockSince > 0 ? g.time - s.dockSince : 0
+    const floor = needAt(z, target!.x, target!.y) // what the enemy there really calls for
+    const need = waited >= 120 ? floor : Math.max(floor, navalBudget(g, k).canGunship && waited < 60 ? SQUAD : 2) // the full squad sets out together; after a minute two will do, after two minutes only what the enemy there demands (a Zumwalt never sits idle for ever)
+    if (z.route.length > 0 && z.routeIdx < z.route.length / 2) { // under way: it waits (route dropped, no turning back) while fewer escorts than the target demands are within reach, and sets off again when they catch up
+      if (guards < Math.min(2, floor)) { z.route = []; z.routeIdx = 0; s.since = g.time - 3 }
       continue
     }
     if (g.time - s.since < 4) continue
-    if (guards < 2) { // no sortie without an escort: wait for the gunships to be built / to arrive (it never goes out alone)
+    if (guards < need) { // no sortie without the squad: wait for the gunships to be built / to arrive (it never goes out alone)
       if (s.dockSince === undefined || s.dockSince <= 0) s.dockSince = g.time
-      aiNote(g, k, 'escort', 'wait', `Zumwalt waiting for escorts: ${guns.length} gunship(s), needs 2${guns.length < 2 ? ' — ' + (navalBudget(g, k).canGunship ? 'building more' : 'naval point budget is full') : ''}`)
-      if (guns.length < 2 && !cantEscort && home.length && !z.docked && z.route.length === 0 && home.every(t => tiles(t, z) > 26)) orderSail(g, z, [s.home.x, s.home.y]) // out in open water with no gunships at all: back to its berth
+      aiNote(g, k, 'escort', 'wait', `Zumwalt waiting for escorts: ${guns.length} gunship(s), needs ${need}${guns.length < need ? ' — ' + (navalBudget(g, k).canGunship ? 'building more' : 'naval point budget is full') : ''}`)
+      if (bondedOf(z).length < 2 && !cantEscort && home.length && !z.docked && z.route.length === 0 && home.every(t => tiles(t, z) > 26)) orderSail(g, z, [s.home.x, s.home.y]) // out in open water with no gunships at all: back to its berth
       continue
     }
     const dT = tiles(z, target!)
-    if (dT >= 11 && dT <= 24 && !hostileShoreNear(g, z.faction, z.x, z.y, 11) && !towerShadow(g, z.faction, z.x, z.y)) continue // already on station: it stays (re-picking the nearest free spot every few seconds made it shuffle about)
+    if (dT >= 9 && dT <= 24 && !hostileShoreNear(g, z.faction, z.x, z.y, (z.standoff ?? SHORE_STANDOFF) - 1.5) && !towerShadow(g, z.faction, z.x, z.y)) continue // already on station: it stays (re-picking the nearest free spot every few seconds made it shuffle about)
     const st = stationNear(g, z, target!, zums)
     if (!st || tiles(st, z) < 1.5 && !z.docked) continue
     s.dockSince = -1
     aiNote(g, k, 'escort', 'ok', 'Zumwalts sailing with cover')
+    z.standoff = st.stand
     if (orderSail(g, z, [st.x, st.y])) s.since = g.time
   }
 
@@ -210,7 +281,7 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
   // ---- 3a. waves against enemy Zumwalts: the gunships beyond the Zumwalts' escorts (3 each) gather, and go in together (never one boat alone) ----
   const waveIds = new Set<number>()
   {
-    const spare = zums.length ? sorted.slice(zums.length * 3) : sorted
+    const spare = sorted.filter(q => (q.escortOf ?? -1) < 0)
     let wave = g.navalWave.get(k)
     if (wave && (!g.boatById(wave.target) || g.time - wave.since > 150)) { g.navalWave.delete(k); wave = undefined }
     if (!wave && spare.length >= 3) {
@@ -235,18 +306,16 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     if (!s) { s = { phase: 'station', since: g.time, home: { x: b.x, y: b.y }, town: -1, avoid: [] }; M.set(b.id, s) }
     b.volleyCd -= 0 // (volleyCd doubles as this ship's formation timer)
     if (waveIds.has(b.id)) continue // (in a wave against an enemy Zumwalt)
-    const hasStrike = !!b.strike && (b.strike.kind === 'boat' ? !!g.boatById(b.strike.id) : true)
+    const hasStrike = !!b.strike && (b.strike.kind === 'boat' ? !!g.boatById(b.strike.id) : b.strike.kind === 'tower' ? !!g.towerById(b.strike.id) : true)
     if (hasStrike && b.strike!.kind === 'boat') continue // in the fight
     if (!hasStrike) b.strike = null
     if (g.time - s.since < 2) continue
-    const kept = s.escortOf !== undefined ? zums.find(q => q.id === s.escortOf && (escortCount.get(q.id) ?? 0) < 3) : undefined // (an escort stays with its Zumwalt: no swapping about between the two)
-    const z = kept ?? zums.slice().sort((p, q) => (escortCount.get(p.id) ?? 0) - (escortCount.get(q.id) ?? 0) || tiles(p, b) - tiles(q, b))[0]
-    if (z) s.escortOf = z.id
-    if (z && (escortCount.get(z.id) ?? 0) < 3) {
-      const idx = escortCount.get(z.id) ?? 0
-      escortCount.set(z.id, idx + 1)
-      const slot = flankSlot(z, idx, headingOf(z, squadronGoal))
-      if (tiles(slot, b) > 1.4 && isWaterCell(g, Math.floor(slot.x / TILE), Math.floor(slot.y / TILE)) && orderSail(g, b, [slot.x, slot.y])) s.since = g.time
+    const z = (b.escortOf ?? -1) >= 0 ? zums.find(q => q.id === b.escortOf) : undefined // (a bonded escort keeps its Zumwalt's side)
+    if (z) {
+      const idx = Math.max(0, bondedOf(z).indexOf(b))
+      escortCount.set(z.id, (escortCount.get(z.id) ?? 0) + 1)
+      const slot = openSlot(g, z, flankSlot(z, idx, headingOf(z, squadronGoal)))
+      if (tiles(slot, b) > 1.4 && orderSail(g, b, [slot.x, slot.y])) s.since = g.time
       continue
     }
     // a spare gunship: escort a cargo boat that is under way, else hunt hostile cargo, else patrol off the target
@@ -254,8 +323,11 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     let goal: { x: number; y: number } | null = null, close = 4
     if (convoy && tiles(convoy, b) < 60) goal = { x: convoy.x, y: convoy.y }
     else {
-      const prey = g.boats.filter(c => c.hp > 0 && c.kind === 'cargo' && g.hostile(k, c.faction) && tiles(c, b) < 40).sort((p, q) => tiles(p, b) - tiles(q, b))[0]
+      const rank = (c: Boat) => (c.kind === 'barge' ? 0 : c.kind === 'boat' ? 1 : 2) // (an invasion barge first, then infantry boats, then cargo)
+      const prey = g.boats.filter(c => c.hp > 0 && (c.kind === 'cargo' || c.kind === 'barge' || c.kind === 'boat') && g.hostile(k, c.faction) && tiles(c, b) < 45).sort((p, q) => rank(p) - rank(q) || tiles(p, b) - tiles(q, b))[0]
+      const site = !prey ? g.towers.filter(t => !t.built && g.hostile(k, t.faction) && (t.kind === 'boat' || t.kind === 'barge' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'zumwalt') && tiles(t, b) < 45).sort((p, q) => tiles(p, b) - tiles(q, b))[0] : undefined
       if (prey) { goal = { x: prey.x, y: prey.y }; setStrikeOn(b, 'boat', prey.id, prey.x, prey.y) }
+      else if (site) { goal = { x: site.x, y: site.y }; setStrikeOn(b, 'tower', site.id, site.x, site.y) }
       else if (squadronGoal) { const ang = b.id * 2.4; goal = { x: squadronGoal.x + Math.cos(ang) * 10 * TILE, y: squadronGoal.y + Math.sin(ang) * 10 * TILE }; close = 3 }
     }
     if (goal) { if (tiles(goal, b) > close && isWaterCell(g, Math.floor(goal.x / TILE), Math.floor(goal.y / TILE)) && orderSail(g, b, [goal.x, goal.y])) s.since = g.time }

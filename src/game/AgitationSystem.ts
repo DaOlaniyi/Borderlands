@@ -155,7 +155,9 @@ export function imperialTick(g: Game, id: number) {
   } else w.delete(id)
   const neighbour = others.filter(o => borders(o.id) && strengthOf(g, o.id) <= mine).sort((a, b) => strengthOf(g, a.id) - strengthOf(g, b.id) || townDistance(g, id, a.id) - townDistance(g, id, b.id))[0]
   if (neighbour) { declareSpill(g, id, neighbour.id, 'war'); return }
-  const rival = others.filter(o => !borders(o.id) && g.towns.some(t => t.owner === o.id && !t.ruined && isSettlement(t))) // far-off settlements: never a border to fear
+  // a nation with a real fleet (a Zumwalt and two gunships) has the means to strike across the sea: any overseas nation that is not clearly stronger is a candidate
+  const fleet = g.boats.some(b => b.faction === id && b.kind === 'zumwalt' && b.hp > 0) && g.boats.filter(b => b.faction === id && b.kind === 'gunship' && b.hp > 0).length >= 2
+  const rival = others.filter(o => !borders(o.id) && (g.towns.some(t => t.owner === o.id && !t.ruined && isSettlement(t)) || (fleet && strengthOf(g, o.id) <= mine * 1.1))) // far-off settlements: never a border to fear
     .sort((a, b) => townDistance(g, id, a.id) - townDistance(g, id, b.id))[0]
   if (rival) declareSpill(g, id, rival.id, 'war')
 }

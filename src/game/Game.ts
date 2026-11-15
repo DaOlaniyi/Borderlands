@@ -4,7 +4,10 @@ import { logEvent, newStats, noteKills, sampleStats, spend, type GameStats } fro
 import { agitationTick, formAlliance, playerAllianceRequest, townFell, updateAgitation } from './AgitationSystem'
 import { updateAI } from './AISystem'
 import { cargoCount, dockLifetime, dockTimeOf, mooringNear, orderSail, spawnBoat, unload, updateBoats, clearStrike, setStrike, type Shell } from './BoatSystem'
-import { regionTownAt, abandonSettlement, claimSettlement, deposit, landStock, leaveCrates, townRadius, townWeight, upgradeLabel, focusRegion, isSettlement, placeSettlement, settlementError, spawnSheep, meatCap, stockAt, stockOfTown, townCap, updateEconomy, upgradeError, upgradeTown, viewStock } from './Economy'
+import type { Evac } from './Evac'
+import { Recorder } from './Recorder'
+import { lettersTick, onCapture, onRelationChange, type Letter } from './Letters'
+import { colonyName, townLabel, regionTownAt, abandonSettlement, claimSettlement, deposit, landStock, leaveCrates, townRadius, townWeight, upgradeLabel, focusRegion, isSettlement, placeSettlement, settlementError, spawnSheep, meatCap, stockAt, stockOfTown, townCap, updateEconomy, upgradeError, upgradeTown, viewStock } from './Economy'
 import { clearTradeRoute, loadPercent, queueUnload, setTradeRoute, setWant, updateTrade } from './Trade'
 import { updateCombat } from './CombatSystem'
 import { Diplomacy } from './Diplomacy'
@@ -60,7 +63,8 @@ export type HudSnapshot = {
   hasSquad: boolean
   allBlocking: boolean
   pawn: { state: string; carry: number; progress: number } | null
-  town: { id: number; mine: boolean; hostile: boolean; owner: string; hp: number; maxHp: number; produce: boolean; raze: boolean; kind: string; level: number; store: Stock | null; shared: boolean; meatCap: number; decay: number; upgrade: { label: string; error: string | null } | null; troops: number; cap: number } | null
+  letters: { id: number; from: number; to: number; fromName: string; toName: string; fromColor: number; toColor: number; kind: string; text: string }[]
+  town: { id: number; label: string; mine: boolean; hostile: boolean; owner: string; hp: number; maxHp: number; produce: boolean; raze: boolean; kind: string; level: number; store: Stock | null; shared: boolean; meatCap: number; decay: number; upgrade: { label: string; error: string | null } | null; troops: number; cap: number } | null
   structure: { id: number; kind: string; built: boolean; progress: number; refund: number } | null
   placing: false | StructureKind
   navy: { points: number; used: number; gun: number; zum: number; zumCap: number; yards: number }
@@ -142,7 +146,25 @@ export class Game {
   watch = new Map<number, number>()
   warGoals = new Map<number, { target: number; since: number; progressAt: number; mark: number; allIn: boolean; launched: boolean; launchedAt?: number }>()
   /** AI colony projects: founding a settlement on an empty island. */
-  colonies = new Map<number, { spot2?: { x: number; y: number } | null; avoid?: number[]; blockedSince?: number; kind: 'found' | 'reinforce'; phase: 'build' | 'load' | 'sail' | 'found' | 'done'; land: number; since: number; spot: { x: number; y: number } | null; cargo: number; boat: number; settlement: number }>()
+  /** AI evacuation missions (one boat fetching the extra troops from a far island) and when each island's extra troops were first seen. */
+  /** Letters AI kingdoms have written to each other (see Letters.ts). */
+  /** The recording the replay page plays back (kept out of the save data and stored beside it: see Recorder.ts). */
+  rec!: Recorder
+  letters: Letter[] = []
+  letterId = 1
+  letterAt = -99
+  letterCool = new Map<string, number>()
+  /** Troops walking to board a boat: when they started and when they were last sent (BoatSystem.boarding). */
+  boardWalk = new Map<number, { since: number; last: number }>()
+  /** Seats the kingdom's loading barges still lack (set by the navy each tick); village guards are relieved to fill them (Garrison.ts). */
+  bargeNeed = new Map<number, number>()
+  /** The last time any of a kingdom's warships had something to shoot at (AISystem rotates an idle fleet's campaign target). */
+  fleetBusy = new Map<number, number>()
+  /** When a kingdom first held enough troops to be worth an invasion, or last waited for them (large nations build up first). */
+  invadeWait = new Map<number, number>()
+  evacs = new Map<number, Evac>() // keyed by kingdom * 1000 + island: one mission per island
+  evacSeen = new Map<string, number>()
+  colonies = new Map<number, { skip?: number[]; walkSince?: Map<number, number>; spot2?: { x: number; y: number } | null; avoid?: number[]; blockedSince?: number; kind: 'found' | 'reinforce'; phase: 'build' | 'load' | 'sail' | 'found' | 'done'; land: number; since: number; spot: { x: number; y: number } | null; cargo: number; boat: number; settlement: number }>()
   /** Strike mode: the next click on the map is a manual target for the selected Zumwalts / gunships. */
   strikeMode = false
   /** Screen shake strength (0..), decays every tick; the renderer applies it. */
@@ -194,7 +216,7 @@ export class Game {
   purposes = new Map<number, number>()
   spills: { t: number; text: string }[] = []
   /** Per-kingdom AI memory (last provocation / last tower attempt, in sim seconds). */
-  aiMemo: { tower: number[]; lot: number[]; target: number[]; targetAt: number[]; dash: Map<number, number>; baseProduce: Kingdom['produce'][]; grievance: { x: number; y: number; t: number; foe: number; kind: 'land' | 'attack' }[][]; respond: Map<number, number>; lastStand: Map<number, number>; blockSince: Map<number, number>; noBlock: Map<number, number>; holdSince: Map<number, number>; ship: Map<number, { phase: 'load' | 'sail' | 'stage' | 'return' | 'station' | 'hold'; since: number; home: { x: number; y: number }; town: number; avoid: number[]; dockSince?: number; escortOf?: number; starveSince?: number; lastHp?: number; hits?: number; spot?: { x: number; y: number } }>; navyAt: number[]; noSpot: number[]; harvestSaved: Map<number, HarvestMode>; expandAt: number[] } = { tower: [], lot: [], target: [], targetAt: [], dash: new Map(), baseProduce: [], grievance: [], respond: new Map(), lastStand: new Map(), blockSince: new Map(), noBlock: new Map(), holdSince: new Map(), ship: new Map(), navyAt: [], noSpot: [], harvestSaved: new Map(), expandAt: [] }
+  aiMemo: { tower: number[]; lot: number[]; target: number[]; targetAt: number[]; dash: Map<number, number>; baseProduce: Kingdom['produce'][]; grievance: { x: number; y: number; t: number; foe: number; kind: 'land' | 'attack' }[][]; respond: Map<number, number>; lastStand: Map<number, number>; blockSince: Map<number, number>; noBlock: Map<number, number>; holdSince: Map<number, number>; ship: Map<number, { phase: 'load' | 'pickup' | 'sail' | 'stage' | 'return' | 'station' | 'hold'; pickLand?: number; since: number; home: { x: number; y: number }; town: number; avoid: number[]; dockSince?: number; escortOf?: number; starveSince?: number; lastHp?: number; hits?: number; spot?: { x: number; y: number } }>; navyAt: number[]; noSpot: number[]; harvestSaved: Map<number, HarvestMode>; expandAt: number[] } = { tower: [], lot: [], target: [], targetAt: [], dash: new Map(), baseProduce: [], grievance: [], respond: new Map(), lastStand: new Map(), blockSince: new Map(), noBlock: new Map(), holdSince: new Map(), ship: new Map(), navyAt: [], noSpot: [], harvestSaved: new Map(), expandAt: [] }
   /** Border violations in progress, keyed by violator*8+victim. */
   private viol = new Map<number, { since: number; seen: number; immediate: boolean }>()
   private dirty = true
@@ -244,8 +266,8 @@ export class Game {
         prodTimer: POP.spawnInterval * (0.5 + this.rng.next()), aggression: ai ? lo + (hi - lo) * spread : 0, temperament, harvest: 'med',
       })
     }
-    if (!opts.plainRelations && count > 1) { // 4-6 imperialists per game, chosen from the seed (never more than half the AI nations), so a shared seed means the same world
-      const [lo, hi] = TEMPER_MIX.imperialists, want = Math.max(1, Math.min(Math.floor((count - 1) / 2), lo + ((this.world.seed >>> 0) % (hi - lo + 1))))
+    if (!opts.plainRelations && count > 1) { // 80 % of the AI nations are imperialists, chosen from the seed, so a shared seed means the same world
+      const want = Math.max(1, Math.round((count - 1) * TEMPER_MIX.imperialShare))
       const order = this.kingdoms.filter(k => !k.isPlayer).sort((a, b) => ((rolls[a.id] * 7919) % 1) - ((rolls[b.id] * 7919) % 1))
       for (const k of order.slice(0, want)) {
         k.temperament = 'imperialist'
@@ -256,6 +278,7 @@ export class Game {
     if (!opts.plainRelations) for (const k of this.kingdoms) if (k.temperament === 'imperialist') k.harvest = 'unlimited' // imperialists gather as much as they can
     this.diplomacy = new Diplomacy(count)
     this.stats = newStats(count)
+    this.rec = Recorder.fresh(this)
     if (!opts.plainRelations) { // a couple of AI pairs may start in conflict at most; alliances have to be earned during play
       let started = 0
       for (let a = 1; a < count; a++) for (let b = a + 1; b < count; b++) {
@@ -612,6 +635,10 @@ export class Game {
       this.diplomacy.update(this.time, () => this.rng.next(), k => !this.kingdoms[k].isPlayer, this.label, k => this.cap(k))
     }
     for (const e of this.diplomacy.events) { this.say(e.text); logEvent(this, /war|allian|ceasefire|peace/i.test(e.text) ? 'war' : 'diplo', e.text) }
+    for (const c of this.diplomacy.changes) onRelationChange(this, c)
+    this.diplomacy.changes.length = 0
+    lettersTick(this)
+    this.rec.tick(this)
     sampleStats(this)
     this.diplomacy.events.length = 0
     this.cleanup()
@@ -821,6 +848,7 @@ export class Game {
     logEvent(this, 'town', `${this.label(faction)} captured a ${isSettlement(t) ? 'settlement' : 'town'} from ${this.label(from)}`, faction)
     this.say(`${this.label(faction)} captured a ${isSettlement(t) ? 'settlement' : 'town'} from ${this.label(from)}`)
     if (this.diplomacy.get(from, faction) === 'conflict') this.diplomacy.declareWar(from, faction, this.time, this.label) // taking a town turns a conflict into war
+    onCapture(this, faction, from, townLabel(this, t) || 'that town', isSettlement(t))
     townFell(this, t.x, t.y, from, faction) // nearby nations get nervous at once
     this.recomputeTerritory()
   }
@@ -859,6 +887,13 @@ export class Game {
 
   removePawn(id: number) { const p = this.pawnById(id); if (p) { releaseTree(this, p); releaseSite(this, p); releaseJob(this, p); this.pawns = this.pawns.filter(q => q !== p); if (this.selection?.kind === 'pawn' && this.selection.id === id) this.selection = null } }
   abandonSettlement(id: number) { return abandonSettlement(this, 0, id) }
+  /** The player names one of their own colonies (an empty name restores the default "X of <nation>"). */
+  renameTown(id: number, name: string) {
+    const t = this.towns[id]; if (!t || t.ruined || t.owner !== 0 || t.kind !== 'settlement') return
+    const n = name.trim().slice(0, 28)
+    if (!n) { t.renamed = false; if (!t.name) t.name = colonyName(this, 0); return }
+    t.name = n; t.renamed = true
+  }
 
   /** A town that simply ceases to exist (a settlement that starved or was abandoned): no loot, no diplomatic consequence. */
   removeTown(t: Town) {
@@ -924,7 +959,10 @@ export class Game {
     if (kind === 'lot') {
       if (!home || isSettlement(home)) return 'No town to attach the lot to'
       if (this.towers.some(t => t.kind === 'lot' && t.town === home.id)) return 'That town already has a lot'
-    } else if (home && isSettlement(home) && home.level < 2) return 'Archer towers need a level 2 settlement'
+    } else if (home && isSettlement(home)) {
+      if (home.level < 2) return 'Archer towers need a level 2 settlement'
+      if (this.towers.filter(t => t.kind === 'tower' && t.town === home.id).length >= SETTLE.maxTowers) return `A settlement can have at most ${SETTLE.maxTowers} archer towers`
+    }
     if (stockAt(this, faction, x, y).lumber < cost) return `Needs ${cost} lumber`
     return null
   }
@@ -1416,7 +1454,7 @@ export class Game {
     const t = this.towns[this.selection.id]
     if (!t || t.ruined) return null
     const mine = t.owner === 0, maxL = t.kind === 'settlement' ? SETTLE.maxLevel : TOWN_LEVEL.maxLevel, up = mine && t.level < maxL ? upgradeError(this, 0, t.id) : 'max'
-    return { id: t.id, mine, hostile: t.owner > 0 && this.hostile(0, t.owner), owner: t.owner >= 0 ? this.label(t.owner) : 'Nobody', hp: Math.round(t.hp), maxHp: t.maxHp, produce: t.produce, raze: t.raze, kind: t.kind, level: t.level, store: t.owner >= 0 ? { ...stockOfTown(this, t) } : null, shared: !t.store, meatCap: t.owner >= 0 ? meatCap(this, t) : 0,
+    return { id: t.id, label: t.kind === 'settlement' ? townLabel(this, t) : '', mine, hostile: t.owner > 0 && this.hostile(0, t.owner), owner: t.owner >= 0 ? this.label(t.owner) : 'Nobody', hp: Math.round(t.hp), maxHp: t.maxHp, produce: t.produce, raze: t.raze, kind: t.kind, level: t.level, store: t.owner >= 0 ? { ...stockOfTown(this, t) } : null, shared: !t.store, meatCap: t.owner >= 0 ? meatCap(this, t) : 0,
       decay: t.kind === 'settlement' ? Math.max(0, Math.ceil(SETTLE.decaySeconds - t.meatT)) : -1,
       upgrade: mine && t.level < maxL ? { label: upgradeLabel(t), error: up } : null,
       troops: t.kind === 'settlement' ? this.units.filter(u => u.faction === t.owner && u.state !== 'dead' && u.inTower < 0 && Math.hypot(u.x - t.x, u.y - t.y) <= SETTLE.troopTiles * TILE).length : 0, cap: townCap(t) }
@@ -1444,6 +1482,7 @@ export class Game {
       units: sel.map(u => ({ id: u.id, name: u.name, type: u.type, hp: Math.round(u.hp), maxHp: u.maxHp, count: u.count, members: u.memberNames, mode: u.mode, state: u.state, cutOff: u.cutOff, overcap: u.overcap, inTower: u.inTower >= 0, healing: this.healingAtTown(u) })),
       join: sel.length >= 2 ? { enabled: this.joinReason(ids) === null, label: this.joinLabel(ids), reason: this.joinReason(ids) } : null,
       hasSquad: sel.some(u => u.count > 1), allBlocking: sel.length > 0 && sel.every(u => u.mode === 'block'),
+      letters: this.letters.filter(l => this.time - l.t < 30).slice(-4).map(l => ({ id: l.id, from: l.from, to: l.to, fromName: this.kingdoms[l.from].name, toName: this.kingdoms[l.to].name, fromColor: this.kingdoms[l.from].color, toColor: this.kingdoms[l.to].color, kind: l.kind, text: l.text })),
       pawn, boat: this.boatHud(), town: this.townHud(), structure: this.structureHud(), spills: this.spills.filter(e => this.time - e.t < AGIT.spillSeconds).map(e => e.text), events: this.log.filter(e => this.time - e.t < 12).slice(-4).map(e => e.text), warnings: this.warnings(), harvest: me.harvest, canBlock: sel.some(u => u.type !== 'archer' && u.inTower < 0), canRange: sel.some(u => u.type === 'archer'), showRange: this.showRange, conflicts: this.conflictTabs(),
     }
   }

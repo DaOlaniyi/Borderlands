@@ -1,3 +1,4 @@
+import { cargoCount } from './BoatSystem'
 import type { Assets } from './AssetLoader'
 import { drawSheet, type Sheet } from './Sprites'
 import { drawEmblem } from './Emblems'
@@ -819,6 +820,7 @@ export class Renderer {
     }
     if (g.showRange) this.drawRanges(ctx)
     if (g.focusKingdom !== null) this.drawRelationArrows(ctx, g.focusKingdom)
+    this.drawTroopRequests(ctx, alpha)
     // block rings for every blocking unit (a blocker occupies twice the usual space)
     for (const u of g.units) {
       if (u.mode !== 'block' || u.state === 'dead') continue
@@ -939,6 +941,29 @@ export class Renderer {
       const home = g.nearestTown(0, x, y)
       if (home) { ctx.strokeStyle = ok ? '#7af07a' : '#f06a6a'; ctx.lineWidth = 2; ctx.setLineDash([6, 8]); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(home.x, home.y); ctx.stroke(); ctx.setLineDash([]) }
       ctx.strokeStyle = ok ? '#7af07a' : '#f06a6a'; ctx.lineWidth = 4; ctx.strokeRect(cx * TILE + 2, cy * TILE + 2, TILE - 4, TILE - 4)
+    }
+  }
+  /** A marker over every AI barge that is trying to load troops (invasion planned, hold not yet full): "REQUESTING UNITS 4/12". */
+  private drawTroopRequests(ctx: CanvasRenderingContext2D, alpha: number) {
+    const g = this.game, z = this.zoomNow
+    if (z < 0.16) return // (zoomed far out the nation tags take over)
+    const px = 1 / z
+    for (const b of g.boats) {
+      if (b.kind !== 'barge' || b.hp <= 0 || g.kingdoms[b.faction].isPlayer || !g.expeditions.has(b.faction)) continue
+      const ph = g.aiMemo.ship.get(b.id)?.phase
+      if (ph !== 'load' && ph !== 'pickup') continue
+      const aboard = cargoCount(g, b)
+      if (aboard >= b.cap) continue
+      const x = b.px + (b.x - b.px) * alpha, y = b.py + (b.y - b.py) * alpha - 46
+      const text = `REQUESTING UNITS ${aboard}/${b.cap}`
+      ctx.save()
+      ctx.font = `bold ${12 * px}px ui-sans-serif, system-ui, sans-serif`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'
+      const w = ctx.measureText(text).width + 14 * px, h = 18 * px
+      ctx.fillStyle = 'rgba(34, 24, 14, 0.88)'; ctx.strokeStyle = FACTION_COLORS[g.kingdoms[b.faction].color]; ctx.lineWidth = 2 * px
+      ctx.beginPath(); ctx.roundRect(x - w / 2, y - h / 2, w, h, 6 * px); ctx.fill(); ctx.stroke()
+      ctx.fillStyle = '#ffd23c'; ctx.fillText(text, x, y + 0.5 * px)
+      ctx.beginPath(); ctx.moveTo(x - 5 * px, y + h / 2); ctx.lineTo(x + 5 * px, y + h / 2); ctx.lineTo(x, y + h / 2 + 7 * px); ctx.closePath(); ctx.fillStyle = 'rgba(34, 24, 14, 0.88)'; ctx.fill()
+      ctx.restore()
     }
   }
   /** Thin arrows from the highlighted nation to everyone it is at war with (red), in conflict with (yellow) or allied to (green). */

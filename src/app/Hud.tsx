@@ -31,6 +31,7 @@ export type HudActions = {
   upgradeTown: (id: number) => void
   unloadCargo: (kind: 'lumber' | 'gold' | 'meat', amount: number) => void
   abandonSettlement: (id: number) => void
+  renameTown: (id: number, name: string) => void
   unloadBoat: () => void
   setZumFocus: (f: ZumFocus) => void
   breakAlliance: (k: number) => void
@@ -49,6 +50,7 @@ export type HudActions = {
   openSaves: () => void
   openRamp: () => void
   openDebug: () => void
+  openReplay: () => void
 }
 
 const fmtTime = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`
@@ -60,6 +62,38 @@ const propUrl = (n: string) => `${import.meta.env.BASE_URL}assets/props/${n}.png
 const BOAT_LABEL: Record<BoatKind, string> = { boat: 'Infantry boat', zumwalt: 'Zumwalt', cargo: 'Cargo boat', gunship: 'Gunship', barge: 'Barge' }
 const REL_LABEL: Record<Relation, string> = { allied: 'Allied', neutral: 'Neutral', conflict: 'In Conflict', war: 'At War', total: 'Total War' }
 
+/** Letters between the AI kingdoms: each shows for about ten seconds (real time) on the left, at most three at once. */
+function LetterFeed({ letters }: { letters: HudSnapshot['letters'] }) {
+  const [shown, setShown] = useState<{ l: HudSnapshot['letters'][number]; until: number }[]>([])
+  useEffect(() => {
+    const now = performance.now()
+    setShown(cur => {
+      const have = new Set(cur.map(c => c.l.id)), seen = (window as unknown as { __letterSeen?: Set<number> }).__letterSeen ??= new Set<number>()
+      const fresh = letters.filter(l => !have.has(l.id) && !seen.has(l.id))
+      for (const l of fresh) seen.add(l.id)
+      return fresh.length ? [...cur.filter(c => c.until > now), ...fresh.map(l => ({ l, until: now + 11000 }))].slice(-3) : cur
+    })
+  }, [letters])
+  useEffect(() => { const t = setInterval(() => setShown(cur => (cur.some(c => c.until <= performance.now()) ? cur.filter(c => c.until > performance.now()) : cur)), 500); return () => clearInterval(t) }, [])
+  if (!shown.length) return null
+  return (
+    <div className="letters" aria-live="polite">
+      {shown.map(({ l }) => (
+        <div key={l.id} className={'letter ' + l.kind}>
+          <div className="lhead"><i style={{ background: FACTION_COLORS[l.fromColor] }} /><b>{l.fromName}</b><span>to</span><i style={{ background: FACTION_COLORS[l.toColor] }} /><b>{l.toName}</b></div>
+          <p>“{l.text}”</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+function TownName({ id, label, mine, rename }: { id: number; label: string; mine: boolean; rename: (id: number, n: string) => void }) {
+  const [edit, setEdit] = useState(false), [text, setText] = useState(label)
+  useEffect(() => { setEdit(false) }, [id])
+  const commit = () => { setEdit(false); if (text.trim() !== label) rename(id, text) }
+  if (edit) return <input className="rename" autoFocus value={text} maxLength={28} onChange={e => setText(e.target.value)} onBlur={commit} onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setText(label); setEdit(false) } }} />
+  return mine ? <b className="kname" title="Click to rename this colony (empty restores the default name)" onClick={() => { setText(label); setEdit(true) }}>{label} ✎</b> : <b>{label}</b>
+}
 function KingdomName({ hud, rename }: { hud: HudSnapshot; rename: (n: string) => void }) {
   const [edit, setEdit] = useState(false)
   const [text, setText] = useState(hud.kingdomName)
@@ -108,6 +142,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
   const lead = sel[0]
   return (
     <div className="hud">
+      <LetterFeed letters={hud.letters} />
       <div className="topleft">
         <div className="panel hud-top">
           <img className="crest" src={house(me.color)} style={tintStyle(me.color)} alt="" />
@@ -159,7 +194,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
             {g.map(m => <KingdomRow key={m.id} k={m} actions={actions} inBloc />)}
           </div>
         ))}</div>}
-        <div className="speed">{[1, 2, 4].map(n => <button key={n} className={hud.speed === n ? 'on' : ''} onClick={() => actions.setSpeed(n)}>{n}×</button>)}<button title="Save the match, or load another (autosaves every 4 minutes)" onClick={actions.openSaves}>Save / Load</button><button title="Live analytics for every nation (Tab)" onClick={actions.openDebug}>War Room</button><button onClick={actions.exit}>Menu</button></div>
+        <div className="speed">{[1, 2, 4, 10].map(n => <button key={n} className={hud.speed === n ? 'on' : ''} onClick={() => actions.setSpeed(n)}>{n}×</button>)}<button title="Save the match, or load another (autosaves every 4 minutes)" onClick={actions.openSaves}>Save / Load</button><button title="Live analytics for every nation (Tab)" onClick={actions.openDebug}>War Room</button><button title="Scrub back through the game so far as a timeline" onClick={actions.openReplay}>Replay</button><button onClick={actions.exit}>Menu</button></div>
       </div>
       <div className="wars">
         {hud.conflicts.length > 0 && <div className="warshead"><b>Conflicts &amp; wars ({hud.conflicts.length})</b><button className="min" title={tabsOpen ? 'Minimise' : 'Expand'} onClick={toggleTabs}>{tabsOpen ? '–' : '+'}</button></div>}
@@ -208,7 +243,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
         <button className={'shopitem' + (hud.placing === 'outpost' ? ' on' : '')} disabled={hud.power < OUTPOST.cost && hud.placing !== 'outpost'} onClick={actions.placeOutpost} title={`Outpost: ${OUTPOST.cost} power, instant, 1 hp. A stake that gives your troops a supplied buffer around it (half-strength territory, combat only: pawns cannot use it) so an army can follow a trail into new land without being cut off. Any enemy land unit destroys it with one strike; archer towers cannot shoot it. Plant it within a few tiles of your own ground.`}>
           <svg width="30" height="40" viewBox="0 0 30 40" aria-hidden="true"><rect x="12" y="2" width="3" height="36" fill="#6b4a2b" /><path d="M15 3 L28 9 L15 15 Z" fill={FACTION_COLORS[me.color]} stroke="#1a1f26" strokeWidth="1.5" /></svg><span>{hud.placing === 'outpost' ? 'Click land…' : 'Outpost'}</span><em><img src={icon('Icon_08')} alt="" />{OUTPOST.cost}</em>
         </button>
-        <button className={'shopitem' + (hud.placing === 'settlement' ? ' on' : '')} onClick={actions.placeSettlement} title={`Settlement: ${SETTLE.cost} lumber from your home stock. Plant it on or beside your territory on a landmass you do not hold yet: land troops from an infantry boat and moor a cargo boat there first. It needs a troop beside it and ${MEAT.eat} meat per ${MEAT.eatPeriod / 60} minutes, or it collapses in ${SETTLE.decaySeconds / 60} minutes. It can never be captured, only destroyed.`}>
+        <button className={'shopitem' + (hud.placing === 'settlement' ? ' on' : '')} onClick={actions.placeSettlement} title={`Settlement: ${SETTLE.cost} lumber (the moored cargo boat's lumber counts first, then your home stock). Plant it on or beside your territory on a landmass you do not hold yet: land troops from an infantry boat and moor a cargo boat there first. It needs a troop beside it and ${MEAT.eat} meat per ${MEAT.eatPeriod / 60} minutes, or it collapses in ${SETTLE.decaySeconds / 60} minutes. It can never be captured, only destroyed.`}>
           <img src={propUrl('pillar')} style={{ imageRendering: 'pixelated' }} alt="" /><span>{hud.placing === 'settlement' ? 'Click land…' : 'Settlement'}</span><em><img src={icon('Icon_02')} alt="" />{SETTLE.cost}</em>
         </button>
         </>}
@@ -256,14 +291,14 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
         </div>
       )}
       {hud.boat && hud.boat.mine && hud.boat.armed && (
-        <div className="zumfocus" title="Place a target X: red when in range, grey when out of range. A new target takes 4 s to lock on (Zumwalts).">
-          <button className={'tsbtn small' + (hud.boat.striking ? ' on' : '')} onClick={actions.strike}>{hud.boat.striking ? 'Click a target…' : 'Strike'}</button>
+        <div className="zumfocus" title="Choose what the selected ship strikes: click any ship, building or troop (or the ground for an X). Red when in range, grey when out of range. A new target takes 4 s to lock on (Zumwalts).">
+          <button className={'tsbtn small' + (hud.boat.striking ? ' on' : '')} onClick={actions.strike}>{hud.boat.striking ? 'Click a target…' : 'Target'}</button>
           {hud.boat.hasStrike && <button className="tsbtn small red" onClick={actions.clearStrikes}>Clear target</button>}
         </div>
       )}
       {hud.boat && hud.boat.mine && hud.boat.zumwalts > 0 && (
         <div className="zumfocus" title="What the selected Zumwalt(s) shoot at first">
-          <span>Target</span>
+          <span>Fires first at</span>
           {ZUM_FOCUS.map(f => <button key={f} className={'tsbtn small' + (hud.boat!.focus === f ? ' on' : '')} onClick={() => actions.setZumFocus(f)}>{f === 'ships' ? 'Ships' : f === 'buildings' ? 'Buildings' : 'Troops'}</button>)}
         </div>
       )}
@@ -295,6 +330,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
       {hud.town && (
         <div className="panel hud-sel">
           <div className="selinfo">
+            {hud.town.label && <TownName id={hud.town.id} label={hud.town.label} mine={hud.town.mine} rename={actions.renameTown} />}
             <b>{hud.town.mine ? 'Your' : `${hud.town.owner}'s`} {hud.town.kind === 'barracks' ? 'barracks' : hud.town.kind === 'settlement' ? 'settlement' : 'town'} · level {hud.town.level}</b>
             <div className="hpbar"><i style={{ width: `${Math.max(0, (hud.town.hp / hud.town.maxHp) * 100)}%` }} /></div>
             <span>HP {hud.town.hp} / {hud.town.maxHp}</span>
@@ -302,7 +338,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
             {hud.town.kind === 'settlement' && hud.town.store && <>
               <span>Troops here {hud.town.troops} (needs 1) · holds {hud.town.cap} units</span>
               {hud.town.decay > 0 && hud.town.decay < SETTLE.decaySeconds && <span className="warn">Collapsing in {hud.town.decay}s — bring meat (cargo boat) and keep a troop beside it</span>}
-              {hud.town.level < 2 && <small>Level 1: a small territory, no archer towers, no harvesting. Level 2: crates, towers, 3 pawns. Level 3: 5 pawns, 10 units and ships can be built beside it.</small>}
+              {hud.town.level < 2 && <small>Level 1: a small territory, no archer towers, no harvesting. Level 2: crates, up to 2 archer towers, 3 pawns. Level 3: 5 pawns, 10 units and ships can be built beside it.</small>}
               {hud.town.mine && <button className="tsbtn small red" title="Give the settlement up: the first unit of any kingdom to reach it claims it" onClick={() => actions.abandonSettlement(hud.town!.id)}>Abandon</button>}
             </>}
             {!hud.town.mine && hud.town.kind !== 'settlement' && <small>CAPTURE: take it intact when it is undefended · RAZE: destroy it to deny the enemy. Click the town again to switch.</small>}

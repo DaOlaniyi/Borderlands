@@ -6,14 +6,14 @@ import { placeSettlement } from '../game/Economy'
 import { makeGame } from './helpers'
 
 describe('AI temperament', () => {
-  it('every AI kingdom is pacifist, neutral or imperialist; every game has 4-6 imperialists; the player has none', () => {
+  it('every AI kingdom is pacifist, neutral or imperialist; 80 % of the AI nations are imperialists; the player has none', () => {
     for (let s = 1; s <= 8; s++) {
       const g = Game.fromSeed(s, 0, 3, { archipelago: true })
       expect(g.kingdoms[0].isPlayer).toBe(true)
       const ai = g.kingdoms.filter(k => !k.isPlayer)
       expect(ai.every(k => k.temperament in TEMPER)).toBe(true)
       const imp = ai.filter(k => k.temperament === 'imperialist')
-      expect(imp.length).toBeGreaterThanOrEqual(Math.min(4, Math.floor(ai.length / 2))); expect(imp.length).toBeLessThanOrEqual(Math.max(6, 1))
+      expect(imp.length).toBe(Math.max(1, Math.round(ai.length * TEMPER_MIX.imperialShare))); expect(imp.length / ai.length).toBeGreaterThanOrEqual(0.7)
       expect(ai.every(k => k.temperament !== ('aggressive' as string))).toBe(true)
       expect(imp.every(k => k.harvest === 'unlimited')).toBe(true)
       for (const k of ai) { const [lo, hi] = TEMPER[k.temperament].aggression; expect(k.aggression).toBeGreaterThanOrEqual(lo); expect(k.aggression).toBeLessThanOrEqual(hi) }

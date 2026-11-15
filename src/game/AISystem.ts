@@ -1,8 +1,11 @@
 import { AGIT, AI, BARGE, BOAT, DOCK, UNIT, LOT, OUTPOST, TILE, TOWER, YARD, ZUMWALT, type BoatKind } from './config'
 import { isSettlement, regionTownAt } from './Economy'
 import { aiNote } from './Stats'
-import { atShipyard, bestYardSite, placeYard, yardBerth, yardCovering, yardLand, yardQuota, yardsOn } from './Yards'
+import { atShipyard, bestYardSite, navalBudget, placeYard, yardBerth, yardCovering, yardLand, yardQuota, yardsOn } from './Yards'
 import { manageColonies } from './ColonyAI'
+import { manageGarrisons, runPost } from './Garrison'
+import { isEvacBoat } from './Evac'
+import { coastSpotFor } from './ColonyAI'
 import { manageNavalForces, navalPicture, navalThreats, stagingPoint } from './NavyAI'
 import { cargoCount, mooringNear, orderSail, unload, isWaterCell } from './BoatSystem'
 import type { Game } from './Game'
@@ -159,7 +162,8 @@ function clearYards(g: Game, k: number) {
     if (b.kind === 'barge' && ph !== 'load') continue // (a barge with troops aboard, under way or holding a beachhead is not tidied away)
     if (b.kind === 'barge' && cargoCount(g, b) > 0) continue
     if (b.kind === 'zumwalt' && ph === 'return') continue // (a Zumwalt being mended)
-    if (b.kind === 'boat' && b.cargo.length) continue
+    if (isEvacBoat(g, b.id)) continue
+    if (b.kind === 'boat' && (b.cargo.length || (g.colonies.get(k) && g.colonies.get(k)!.phase !== 'done'))) continue // (a colony project is using the infantry boat)
     const spot = b.kind === 'barge' ? beyondYardMooring(g, k, b, own, claimed) : parkingSpot(g, b, yard, claimed)
     if (!spot) continue
     claimed.push(spot)
@@ -216,6 +220,7 @@ function watchdog(g: Game, mine: Unit[]) {
     if (u.hold) {
       const since = M.holdSince.get(u.id) ?? g.time
       M.holdSince.set(u.id, since)
+      if (u.aiRole === 'post') continue // (a posted guard stays for good)
       const limit = u.aiRole === 'bridge' ? AI.garrisonSeconds * 3 : u.aiRole === 'laststand' ? AI.maxBlockSeconds : AI.garrisonSeconds
       if (g.time - since > limit) { M.lastStand.delete(u.id); release(g, u); if (u.mode === 'block') g.setBlock(u, false) }
     } else M.holdSince.delete(u.id)
@@ -282,6 +287,8 @@ function plan(g: Game, k: number) {
     if (a) g.orderMoveTo(a, t.x, t.y + 36)
   }
 
+  manageGarrisons(g, k, mine, enemies)
+
   // ---- roles ----
   const worst = warFoes.reduce((r, f) => (g.diplomacy.get(k, f) === 'total' ? 3 : Math.max(r, 2)), 0)
   const share = worst >= 3 ? AI.totalShare : AI.warShare
@@ -300,7 +307,7 @@ function plan(g: Game, k: number) {
     else if (hpFrac(u) < AI.retreatBelow && !pushing(u)) g.resting.set(u.id, u.hp <= 2 ? AI.freshRestUntil : AI.restUntil) // (a brand-new recruit starts at 1 hp)
   }
   if (g.tickCount % 250 === 0) for (const id of [...g.resting.keys()]) if (!g.unitById(id)) g.resting.delete(id)
-  const ready = melee.filter(u => !g.resting.has(u.id))
+  const ready = melee.filter(u => !g.resting.has(u.id) && u.aiRole !== 'post')
   // priorities: 1) defend ourselves, 2) spare troops defend threatened allies, 3) the rest pursue our own objectives
   // a raider or two near one of our towns does not call the army home: only a real assault does (the troops left behind, and the garrison, see to the rest)
   const raiders = enemies.filter(e => myTowns.some(t => tiles(t, e) < 8))
@@ -401,6 +408,7 @@ function plan(g: Game, k: number) {
 
   mine.forEach((u, idx) => {
     const attacker = attackers.has(u.id)
+    if (u.aiRole === 'post') { runPost(g, u, enemies); return }
     // ---- dash: accept the supply risk to take an undefended town, hold it, or fall back from resistance ----
     if (u.aiRole === 'dash') {
       const town = g.towns[g.aiMemo.dash.get(u.id) ?? -1]
@@ -782,7 +790,10 @@ function manageFleet(g: Game, k: number, towns: number, atWar = false, underNava
   if (imperial) want = Math.min(6, 2 + Math.floor(towns / 3) + (atWar ? 1 : 0)) // for an imperialist Zumwalts are a top objective
   if (underNavalAttack && towns >= 1) want = Math.max(want, 2) // attacked from the sea: answer with warships of our own
   const have = g.boats.filter(b => b.faction === k && b.kind === 'zumwalt').length + g.towers.filter(t => t.faction === k && t.kind === 'zumwalt').length
-  const wants = want > have && (underNavalAttack || g.time > (imperial ? 60 : AI.navyAfter)) && (underNavalAttack || imperial || (diploWar && lostZums) || structuresDone(g, k)) && !g.towers.some(t => t.faction === k && t.kind === 'zumwalt')
+  // a squad is finished before the next Zumwalt is laid down: every Zumwalt has three gunships (built or on the stocks) unless the naval point budget cannot afford more
+  const gunCount = g.boats.filter(b => b.faction === k && b.kind === 'gunship' && b.hp > 0).length + g.towers.filter(t => t.faction === k && t.kind === 'gunship' && !t.built).length
+  const squadsFull = have === 0 || gunCount >= 3 * have || !navalBudget(g, k).canGunship
+  const wants = want > have && squadsFull && (underNavalAttack || g.time > (imperial ? 60 : AI.navyAfter)) && (underNavalAttack || imperial || (diploWar && lostZums) || structuresDone(g, k)) && !g.towers.some(t => t.faction === k && t.kind === 'zumwalt')
   const need = ZUMWALT.cost + AI.zumReserve
   if (!wants) {
     if (want <= have) aiNote(g, k, 'zumwalt', 'ok', want === 0 ? 'None wanted (too few towns)' : `Fleet complete: ${have}/${want} Zumwalts`)
@@ -852,6 +863,11 @@ export function coastDistance(g: Game, t: Town): number {
 }
 
 /** The overseas town to attack: the one nearest the coast (easy to land beside), then the weakly held and the near. */
+/** How many barges one invasion wave may have: 3, and one more for every 5 towns the nation holds (up to 8): a big nation sends a real armada. */
+const maxBarges = (g: Game, k: number) => Math.min(AI.maxBoatsCap, AI.maxBoats + Math.floor(g.ownedTowns(k) / AI.maxBoatsPerTowns))
+/** Troops of a kingdom free to be shipped: melee, healthy enough, not cut off, not already walking to a boat. */
+const shippable = (u: Unit) => u.type !== 'archer' && !u.cutOff && u.boardBoat < 0 && u.inTower < 0 && u.state !== 'dead' && u.hp >= u.maxHp * 0.7 && (u.aiRole === '' || u.aiRole === 'respond')
+
 function pickInvasionTarget(g: Game, k: number, towns: Town[]): Town | null {
   let best: Town | null = null, bs = Infinity
   for (const t of towns) {
@@ -877,6 +893,7 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
   // townless kingdoms look for any town not held by an ally; the rest only cross the sea to a town of a nation they are at war with
   const overseas = homeless ? g.towns.filter(t => !t.ruined && !g.diplomacy.allied(k, t.owner) && !mine.some(u => landmassAt(g.world, u.x, u.y) === landmassAt(g.world, t.x, t.y))) : seaEnemy
   // ---- plan the expedition: the enemy town nearest the coast, and enough boats to out-number everyone who can meet us there ----
+  const maxB = maxBarges(g, k)
   const mobile = mine.filter(u => u.type !== 'archer' && !u.cutOff)
   const troops = mobile.reduce((n, u) => n + u.count, 0)
   const navalTroops = landWar ? Math.floor(troops * AI.navyShareAtLandWar) : troops // (a land war against a neighbour comes first: only a slice of the army may be shipped off)
@@ -895,25 +912,33 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
       const pic0 = navalPicture(g, k, target)
       const needsZum = defenders > 8 || pic0.ships.length > 0 || pic0.towers.length > 0 // a lightly held, undefended coast can be rushed by one or two infantry boats; anything more needs the warships first
       // with warships on the job the defence is whittled down before the infantry lands, so the force is judged at the beach, not now
-      if (homeless || (navalTroops * 0.95 >= (hasZum ? AI.minForce : required) && (hasZum || !needsZum))) {
+      // a nation builds up before it sails: at least 9 troops (a barge and a half), 18 for a nation of 6+ towns, 24 for 10+, and about as many as the defenders (up to a full armada);
+      // after four minutes of waiting it goes with whatever it has, if that is a decent wave
+      const towns = g.ownedTowns(k), minWave = Math.max(AI.minForce, towns >= 10 ? 24 : towns >= 6 ? 18 : 9)
+      const goal = Math.min(maxB * BARGE.cap, Math.max(minWave, Math.ceil(defenders * 1.1)))
+      const waitSince = g.invadeWait.get(k) ?? g.time; g.invadeWait.set(k, waitSince)
+      const enough = navalTroops * 0.95 >= goal || (g.time - waitSince > 240 && navalTroops * 0.95 >= minWave)
+      if (!enough && !homeless) aiNote(g, k, 'barge', 'wait', `Building up for an invasion: ${Math.floor(navalTroops * 0.95)} / ${goal} troops`)
+      if (homeless || (enough && navalTroops * 0.95 >= (hasZum ? AI.minForce : required) && (hasZum || !needsZum))) {
+        g.invadeWait.delete(k)
         const frac = Math.min(AI.commitMax, Math.max(AI.commitMin, preferred / Math.max(1, troops)))
         // a wave is 1-3 FULL infantry boats: as many as the nation's troops can fill (at least what the target's defence calls for), never more than it can load
         const free = Math.floor(navalTroops * 0.95), need = Math.max(Math.ceil(preferred / BARGE.cap), Math.ceil((hasZum ? AI.minForce : required) / BARGE.cap), Math.floor(free / BARGE.cap), 1)
-        const waveBoats = Math.min(AI.maxBoats, Math.max(1, Math.floor(free / BARGE.cap)), need) // (whole barges: each is filled to the brim)
-        ex = { target: target.id, frac, force: homeless ? Math.min(AI.maxBoats * BARGE.cap, Math.max(1, Math.round(troops * frac))) : Math.max(1, Math.min(waveBoats * BARGE.cap, free)), since: g.time, launched: false }
+        const waveBoats = Math.min(maxB, Math.max(1, Math.floor(free / BARGE.cap)), need) // (whole barges: each is filled to the brim)
+        ex = { target: target.id, frac, force: homeless ? Math.min(maxB * BARGE.cap, Math.max(1, Math.round(troops * frac))) : Math.max(1, Math.min(waveBoats * BARGE.cap, free)), since: g.time, launched: false }
         g.expeditions.set(k, ex)
       }
     }
   }
   if (ex && !ex.launched && !homeless) { // the army grows while the barges are built and loaded: the wave grows with it (never shrinks), so every barge sails full
-    const freeNow = Math.floor(navalTroops * 0.95), boatsNow = Math.min(AI.maxBoats, Math.max(1, Math.floor(freeNow / BARGE.cap)))
+    const freeNow = Math.floor(navalTroops * 0.95), boatsNow = Math.min(maxB, Math.max(1, Math.floor(freeNow / BARGE.cap)))
     ex.force = Math.max(ex.force, Math.min(boatsNow * BARGE.cap, freeNow))
   }
   if (ex && g.time > AI.navyAfter * (homeless ? 0 : 1) && g.time - (g.aiMemo.navyAt[k] ?? -999) > AI.navyEvery && kingdom.aggression > 0.2) {
     g.aiMemo.navyAt[k] = g.time
     const sites = g.towers.filter(t => t.faction === k && t.kind === 'barge')
     const boats = myBoats.filter(b => b.kind === 'barge' && g.aiMemo.ship.get(b.id)?.phase !== 'hold').length + sites.length // (a barge holding a beachhead is not available for the next wave)
-    const wanted = Math.min(AI.maxBoats, Math.ceil(ex.force / BARGE.cap))
+    const wanted = Math.min(maxB, Math.ceil(ex.force / BARGE.cap))
     if (boats < wanted && !sites.length && !homeless) {
       if (kingdom.lumber >= BARGE.cost + AI.navyReserve) aiNote(g, k, 'barge', placeShip(g, k, 'barge', mobile.length ? { x: mobile.reduce((n, u) => n + u.x, 0) / mobile.length, y: mobile.reduce((n, u) => n + u.y, 0) / mobile.length } : undefined) ? 'ok' : 'block', 'Laying down a barge (or no free spot)')
       else { boostHarvest(g, k); aiNote(g, k, 'barge', 'block', `Saving lumber: ${Math.floor(kingdom.lumber)} / ${BARGE.cost + AI.navyReserve}`) }
@@ -926,8 +951,14 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
   let campaign: Town | null = ex ? g.towns[ex.target] ?? null : null
   if (!campaign && leadShip && enemyTowns.length) { // the fleet keeps one objective for a while (re-picking the nearest every tick made it sail back and forth between two)
     const keep = g.campaignMemo.get(k), held = keep ? enemyTowns.find(t => t.id === keep.town) : undefined
-    if (held && g.time - keep!.since < 180) campaign = held
-    else { campaign = enemyTowns.slice().sort((p, q) => tiles(p, leadShip) - tiles(q, leadShip))[0]; g.campaignMemo.set(k, { town: campaign.id, since: g.time }) }
+    const idleFor = g.time - (g.fleetBusy.get(k) ?? g.time) // how long the fleet has had nothing to shoot at
+    if (held && g.time - keep!.since < 180 && idleFor < 75) campaign = held
+    else { // pick the nearest enemy town; a fleet that has sat idle for over a minute moves on to the next one instead of waiting for ever
+      const sorted = enemyTowns.slice().sort((p, q) => tiles(p, leadShip) - tiles(q, leadShip))
+      const at = held ? sorted.findIndex(t => t.id === held.id) : -1
+      campaign = idleFor >= 75 && sorted.length > 1 && at >= 0 ? sorted[(at + 1) % Math.min(sorted.length, 5)] : sorted[0]
+      g.campaignMemo.set(k, { town: campaign.id, since: g.time }); g.fleetBusy.set(k, g.time)
+    }
   }
   manageNavalForces(g, k, campaign, homeTowns)
   // ---- operate ----
@@ -938,43 +969,52 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
   const fleetUp = !myBoats.some(q => q.kind === 'zumwalt') || myBoats.some(q => q.kind === 'zumwalt' && campaign && tiles(q, campaign) < 32)
   const navyReady = homeless || waitedAll > 90 || // (barges moor under fire and shove the defenders back: the fleet does not wait four minutes for the warships any more)
      ((!picNow || (picNow.ships.length === 0 && picNow.towers.length === 0)) && fleetUp)
+  { // how many seats the loading barges still lack: village guards are relieved to fill them (Garrison.ts)
+    let need = 0
+    if (ex) for (const q of myBoats) if (q.kind === 'barge') { const m = M.get(q.id); if (m && (m.phase === 'load' || m.phase === 'pickup')) need += Math.max(0, Math.ceil(q.cap * AI.bargeMinLoad) - cargoCount(g, q) - mine.filter(u => u.boardBoat === q.id).reduce((n, u) => n + u.count, 0)) }
+    g.bargeNeed.set(k, need)
+  }
+  const goHome = (b: Boat, s: { home: { x: number; y: number }; avoid: number[] }) => { const berth = yardBerth(g, k, b, s.avoid); const t = berth ?? s.home; return orderSail(g, b, [t.x, t.y]) } // (a damaged boat goes to a FREE berth at a shipyard, not to the spot it left from)
   for (const b of myBoats) {
     let s = M.get(b.id)
     if (!s) { s = { phase: b.kind === 'zumwalt' ? 'station' : 'load', since: g.time, home: { x: b.x, y: b.y }, town: -1, avoid: [] }; M.set(b.id, s) }
     if (b.kind === 'zumwalt' || b.kind === 'gunship') continue // (warships are run by the naval campaign code in NavyAI.ts)
     // ---- the invasion fleet: BARGES carry the troops across the sea to a beach (infantry boats only ferry troops between a nation's own lands, see ColonyAI; cargo boats and gunships have their own handlers) ----
     if (b.kind !== 'barge') continue
+    if (isEvacBoat(g, b.id)) continue // (fetching troops home: Evac.ts runs it)
     if (s.phase === 'hold') { // moored at the beachhead: it keeps the ground friendly (supply) while the landed troops press inland
       const landNow = b.dockCell >= 0 ? g.info.landmass[b.dockCell] : -1
       const foeTowns = g.towns.filter(t => !t.ruined && t.owner >= 0 && g.hostile(k, t.owner) && t.land === landNow)
-      const goal = (ex && g.towns[ex.target] && g.towns[ex.target].land === landNow ? g.towns[ex.target] : null) ?? foeTowns.sort((p, q) => tiles(p, b) - tiles(q, b))[0] ?? null
+      const goal = foeTowns.slice().sort((p, q) => tiles(p, b) - tiles(q, b))[0] ?? null // (the landing party goes for the NEAREST enemy town, not the one the plan named)
       if (g.tickCount % 25 === b.id % 25 && b.docked) {
-        const here = mine.filter(u => u.aiRole === '' && u.boardBoat < 0 && u.state === 'idle' && !u.cutOff && landmassAt(g.world, u.x, u.y) === landNow && tiles(u, b) < 16)
+        const here = mine.filter(u => u.aiRole === '' && u.boardBoat < 0 && u.state === 'idle' && !u.cutOff && landmassAt(g.world, u.x, u.y) === landNow && tiles(u, b) < 30)
         for (const u of here) {
-          const e = g.units.filter(q => q.state !== 'dead' && q.inTower < 0 && g.hostile(k, q.faction) && landmassAt(g.world, q.x, q.y) === landNow && tiles(q, u) < 22).sort((p, q) => tiles(p, u) - tiles(q, u))[0]
-          if (e) g.orderMoveTo(u, e.x, e.y); else if (goal) g.orderMoveTo(u, goal.x, goal.y + 30)
+          const e = g.units.filter(q => q.state !== 'dead' && q.inTower < 0 && g.hostile(k, q.faction) && landmassAt(g.world, q.x, q.y) === landNow && tiles(q, u) < 14).sort((p, q) => tiles(p, u) - tiles(q, u))[0]
+          const town = foeTowns.slice().sort((p, q) => tiles(p, u) - tiles(q, u))[0]
+          if (e && (!town || tiles(e, u) < tiles(town, u))) g.orderMoveTo(u, e.x, e.y); else if (town) g.orderMoveTo(u, town.x, town.y + 30)
         }
       }
       const safe = !g.units.some(q => q.state !== 'dead' && q.inTower < 0 && g.hostile(k, q.faction) && tiles(q, b) < 14)
       const won = !!goal ? false : foeTowns.length === 0
-      if (!b.docked || b.hp < b.maxHp * 0.35 || g.time - s.since > 420 || (won && safe && g.time - s.since > 30)) { s.phase = 'return'; s.since = g.time; b.noDock = false; if (b.docked || b.route.length === 0) orderSail(g, b, [s.home.x, s.home.y]) }
+      if (!b.docked || b.hp < b.maxHp * 0.35 || g.time - s.since > 420 || (won && safe && g.time - s.since > 30)) { s.phase = 'return'; s.since = g.time; b.noDock = false; if (b.docked || b.route.length === 0) goHome(b, s) }
       continue
     }
     if (!ex) { // nothing to cross for: wait at home
       b.noDock = false
       if (b.docked && b.cargo.length && s.phase !== 'load') unload(g, b) // troops still aboard at the quay go ashore (they must not be stranded on a boat nobody sails)
-      if (s.phase !== 'load' && !b.docked && b.route.length === 0 && !b.docking) { orderSail(g, b, [s.home.x, s.home.y]); s.phase = 'return' }
+      if (s.phase !== 'load' && !b.docked && b.route.length === 0 && !b.docking) { goHome(b, s); s.phase = 'return' }
       continue
     }
     const nearest = g.towns[ex.target]
     if (s.phase === 'load') {
-      if (!b.docked) continue
+      if (!b.docked) { if (b.route.length === 0 && !b.docking && g.time - s.since > 8) { b.noDock = false; goHome(b, s); s.since = g.time } else if (b.docking && b.dockBlocked && g.time - s.since > 8) { const c = g.cellAt(b.x, b.y); if (c >= 0) s.avoid.push(c); goHome(b, s); s.since = g.time } continue }
       if (b.hp < b.maxHp * 0.6) { // a battered boat is mended at a shipyard (and nowhere else) before it takes troops: it sails there if it is moored elsewhere
         if (!atShipyard(g, b) && b.route.length === 0 && !b.docking) { const berth = yardBerth(g, k, b); if (berth) { b.noDock = false; orderSail(g, b, [berth.x, berth.y]) } }
         continue
       }
       const boatLand = b.dockCell >= 0 ? g.info.landmass[b.dockCell] : -1 // (the ship itself floats on water: compare with the land it is moored to)
-      const pool = mine.filter(u => u.type !== 'archer' && (u.aiRole === '' || homeless) && !u.cutOff && (homeless || u.hp >= u.maxHp * 0.7) && u.boardBoat < 0 && Math.hypot(u.x - b.x, u.y - b.y) < 45 * TILE && landmassAt(g.world, u.x, u.y) === boatLand).sort((p, q) => Math.hypot(p.x - b.x, p.y - b.y) - Math.hypot(q.x - b.x, q.y - b.y)) // (the nearest walk to the boat; it may have been built far from the barracks)
+      const minLoad = Math.ceil(b.cap * AI.bargeMinLoad), smallLoad = Math.ceil(b.cap * AI.bargeSmallLoad)
+      const pool = mine.filter(u => u.type !== 'archer' && (u.aiRole === '' || homeless) && !u.cutOff && (homeless || u.hp >= u.maxHp * 0.7) && u.boardBoat < 0 && Math.hypot(u.x - b.x, u.y - b.y) < 45 * TILE && landmassAt(g.world, u.x, u.y) === boatLand).sort((p, q) => Math.hypot(p.x - b.x, p.y - b.y) - Math.hypot(q.x - b.x, q.y - b.y)) // (the nearest walk to the boat)
       const aboard = cargoCount(g, b)
       const heading = mine.filter(u => u.boardBoat === b.id)
       let room = b.cap - aboard - heading.reduce((n, u) => n + u.count, 0)
@@ -984,19 +1024,40 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
         if (u.count > room) continue
         if (b.dockCell >= 0 && g.orderMoveTo(u, (b.dockCell % g.world.w + 0.5) * TILE, (Math.floor(b.dockCell / g.world.w) + 0.5) * TILE)) { u.boardBoat = b.id; u.aiRole = 'respond'; g.aiMemo.respond.set(u.id, g.time + 150); room -= u.count } // (kept on the job until they are aboard: no wandering off halfway)
       }
-      // a barge is FULL when nobody more can fit; it is only sent short when nobody is left to send (a small nation), after a patient wait
       const walking = mine.some(u => u.boardBoat === b.id)
+      const coming = mine.filter(u => u.boardBoat === b.id).reduce((n, u) => n + u.count, 0)
+      const seatsShort = minLoad - aboard - coming
+      // ---- not enough troops by this quay: search the kingdom's other holdings (home island, settlements) and dock there to fill up ----
+      let pickup = -1
+      if (seatsShort > 0 && !walking && g.time - s.since > 8) {
+        const claims = new Map<number, number>()
+        for (const q of myBoats) if (q !== b && q.kind === 'barge') { const m = M.get(q.id); const L = m?.phase === 'pickup' ? m.pickLand ?? -1 : m?.phase === 'load' && q.docked && q.dockCell >= 0 ? g.info.landmass[q.dockCell] : -1; if (L >= 0) claims.set(L, (claims.get(L) ?? 0) + Math.max(0, Math.ceil(q.cap * AI.bargeMinLoad) - cargoCount(g, q))) }
+        let bestN = Math.max(3, Math.min(6, seatsShort))
+        for (const L of new Set(g.towns.filter(t => t.owner === k && !t.ruined).map(t => t.land))) {
+          if (L === boatLand) continue
+          const n = mine.filter(u => shippable(u) && u.aiRole === '' && landmassAt(g.world, u.x, u.y) === L).length - (claims.get(L) ?? 0)
+          if (n >= bestN) { bestN = n; pickup = L }
+        }
+        if (pickup >= 0) {
+          const ts = mine.filter(u => shippable(u) && u.aiRole === '' && landmassAt(g.world, u.x, u.y) === pickup)
+          const c = { x: ts.reduce((n, u) => n + u.x, 0) / ts.length, y: ts.reduce((n, u) => n + u.y, 0) / ts.length }
+          const spot = coastSpotFor(g, k, pickup, c, [])
+          b.noDock = false
+          if (spot && orderSail(g, b, [spot.x, spot.y])) { s.phase = 'pickup'; s.pickLand = pickup; s.since = g.time; s.spot = spot; aiNote(g, k, 'barge', 'ok', `A barge sails to another holding to fill up (${aboard}/${b.cap} aboard)`); continue }
+          pickup = -1
+        }
+      }
+      // a barge is FULL when nobody more can fit; it sails with at least 75 % of its seats filled, or half when the whole kingdom has nobody more to give
       const nobodyLeft = !walking && !candidates.some(u => u.boardBoat < 0 && u.count <= b.cap - aboard)
-      const isFull = aboard >= b.cap
-      if (nobodyLeft && !walking && aboard > 0) s.starveSince = s.starveSince && s.starveSince > 0 ? s.starveSince : g.time; else s.starveSince = -1
-      const starved = (s.starveSince ?? -1) > 0 && g.time - (s.starveSince ?? 0) > 60
-      const ready = (q: typeof b) => { const m = M.get(q.id); return cargoCount(g, q) >= q.cap || (!!m && (m.starveSince ?? -1) > 0 && g.time - (m.starveSince ?? 0) > 60 && cargoCount(g, q) > 0) }
-      const loading = myBoats.filter(q => q.kind === 'barge' && M.get(q.id)?.phase === 'load')
+      if (nobodyLeft && !walking && aboard > 0 && pickup < 0) s.starveSince = s.starveSince && s.starveSince > 0 ? s.starveSince : g.time; else s.starveSince = -1
+      const ready = (q: typeof b) => { const m = M.get(q.id), n = cargoCount(g, q); return n >= Math.ceil(q.cap * AI.bargeMinLoad) || (!!m && (m.starveSince ?? -1) > 0 && g.time - (m.starveSince ?? 0) > 120 && n >= Math.ceil(q.cap * AI.bargeSmallLoad)) }
+      const loading = myBoats.filter(q => q.kind === 'barge' && (M.get(q.id)?.phase === 'load' || M.get(q.id)?.phase === 'pickup'))
       const aboardAll = loading.reduce((n, q) => n + cargoCount(g, q), 0)
       const waited = g.time - ex.since
       const boatsNeeded = Math.max(1, Math.ceil(ex.force / BARGE.cap)), fleetHere = loading.length >= boatsNeeded // (the whole fleet sails together: wait for the last boat to be built and loaded)
       const everyoneReady = loading.every(ready)
-      const loaded = (isFull || starved) && ((fleetHere && everyoneReady) || waited > 240) || (waited > 420 && aboardAll >= 1)
+      const loaded = ready(b) && ((fleetHere && everyoneReady) || waited > 240) || (waited > 420 && ready(b))
+      void smallLoad; void aboardAll
       if (loaded && cargoCount(g, b) > 0) {
         s.avoid = []
         const home = { x: b.x, y: b.y }
@@ -1011,18 +1072,25 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
           else b.noDock = false
         }
       } else if (cargoCount(g, b) === 0 && g.time - s.since > 150) s.since = g.time
+    } else if (s.phase === 'pickup') { // sailing to another holding to take troops aboard there; the ordinary loading logic takes over once it is moored
+      b.noDock = false
+      const L = s.pickLand ?? -1, here = b.docked && b.dockCell >= 0 ? g.info.landmass[b.dockCell] : -1
+      if (b.docked && here === L) { s.phase = 'load'; s.since = g.time; s.starveSince = -1; s.pickLand = undefined }
+      else if (L < 0 || g.time - s.since > 150) { s.phase = 'load'; s.since = g.time; s.pickLand = undefined } // (gave up: it loads wherever it lies)
+      else if (b.docking && b.dockBlocked && g.time - s.since > 10) { s.avoid.push(g.cellAt(b.x, b.y)); const spot = coastSpotFor(g, k, L, b, s.avoid); if (spot && orderSail(g, b, [spot.x, spot.y])) { s.spot = spot; s.since = g.time - 100 } else { s.phase = 'load'; s.pickLand = undefined } }
+      else if (!b.docked && !b.docking && b.route.length === 0 && s.spot) orderSail(g, b, [s.spot.x, s.spot.y])
     } else if (s.phase === 'stage') { // waiting offshore with the fleet until the sea and the walls are cleared
       b.noDock = true
       const stagedAll = myBoats.filter(q => q.kind === 'barge' && M.get(q.id)?.phase === 'stage').reduce((n, q) => n + cargoCount(g, q), 0)
       const defendersNow = g.units.filter(u => u.state !== 'dead' && u.inTower < 0 && g.hostile(k, u.faction) && landmassAt(g.world, u.x, u.y) === nearest.land).reduce((n, u) => n + u.count, 0)
       const hurtNow = b.hp < (s.lastHp ?? b.hp) - 1; s.lastHp = b.hp
-      if (b.hp < b.maxHp * 0.4 || (hurtNow && !picNow?.ships.length && g.time - s.since > 20 && b.hp < b.maxHp * 0.7)) { b.noDock = false; s.phase = 'return'; orderSail(g, b, [s.home.x, s.home.y]); s.since = g.time }
+      if (b.hp < b.maxHp * 0.4 || (hurtNow && !picNow?.ships.length && g.time - s.since > 20 && b.hp < b.maxHp * 0.7)) { b.noDock = false; s.phase = 'return'; goHome(b, s); s.since = g.time }
       else if (!b.docked && b.route.length === 0 && s.spot && tiles(b, s.spot) > 4) orderSail(g, b, [s.spot.x, s.spot.y]) // (re-plan if the route fell through)
       else if (navyReady && (stagedAll >= Math.max(AI.minForce > 0 ? 2 : 1, Math.ceil(defendersNow * 1.2)) || g.time - s.since > 150)) { // the beach is ours to take: in, together
         b.noDock = false; s.avoid = []
         const apart = myBoats.filter(q => q !== b && M.get(q.id)?.phase === 'sail' && M.get(q.id)?.spot).map(q => M.get(q.id)!.spot!)
         const spot = sailToLanding(g, b, nearest, k, s.avoid, apart)
-        if (spot) { s.phase = 'sail'; s.since = g.time; s.dockSince = -1; s.hits = 0; s.spot = spot } else { s.phase = 'return'; orderSail(g, b, [s.home.x, s.home.y]) }
+        if (spot) { s.phase = 'sail'; s.since = g.time; s.dockSince = -1; s.hits = 0; s.spot = spot } else { s.phase = 'return'; goHome(b, s) }
       }
     } else if (s.phase === 'sail') {
       const hurt = b.hp < (s.lastHp ?? b.hp) - 1
@@ -1034,19 +1102,22 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
         s.dockSince = -1; s.hits = 0
         const spot = s.avoid.length < 8 ? sailToLanding(g, b, nearest, k, s.avoid, others) : null
         if (spot) s.spot = spot
-        else { s.phase = 'return'; orderSail(g, b, [s.home.x, s.home.y]) }
+        else { s.phase = 'return'; goHome(b, s) }
       }
       if (b.docked && b.route.length === 0) { unload(g, b); s.phase = 'hold'; s.since = g.time; b.noDock = true } // (the barge stays moored: its beachhead keeps supplying the landed troops)
-      else if (b.hp < b.maxHp * (b.kind === 'barge' ? 0.2 : 0.4) && !b.docked) { s.phase = 'return'; orderSail(g, b, [s.home.x, s.home.y]) } // too hurt: retreat before it sinks (a barge presses on much longer)
+      else if (b.hp < b.maxHp * (b.kind === 'barge' ? 0.2 : 0.4) && !b.docked) { s.phase = 'return'; goHome(b, s) } // too hurt: retreat before it sinks (a barge presses on much longer)
       else if (b.docking && b.dockBlocked) { // defenders hold the beach: give it a few seconds, then try elsewhere
         s.dockSince = s.dockSince && s.dockSince > 0 ? s.dockSince : g.time
         if (g.time - s.dockSince > 6) redirect()
       } else if (b.kind !== 'barge' && hurt && !b.docked) { s.hits = (s.hits ?? 0) + 1; if (s.hits >= 3) redirect() } // under fire on the approach (a barge does not care: it moors under fire)
-      else if (g.time - s.since > 150) { s.phase = 'return'; orderSail(g, b, [s.home.x, s.home.y]) }
+      else if (g.time - s.since > 150) { s.phase = 'return'; goHome(b, s) }
     } else if (s.phase === 'return') {
       b.noDock = false
-      if (b.docked) { s.phase = 'load'; s.since = g.time }
-      else if ((b.route.length === 0 && !b.docking) || g.time - s.since > 150) { orderSail(g, b, [s.home.x, s.home.y]); s.since = g.time }
+      if (b.docked) { s.phase = 'load'; s.since = g.time; s.dockSince = -1 }
+      else if (b.docking && b.dockBlocked) { // the berth is taken or held: after a few seconds look for another (a damaged barge used to circle one occupied berth for ever)
+        s.dockSince = s.dockSince && s.dockSince > 0 ? s.dockSince : g.time
+        if (g.time - s.dockSince > 5) { const c = b.route.length >= 2 ? g.cellAt(b.route[b.route.length - 2], b.route[b.route.length - 1]) : g.cellAt(b.x, b.y); if (c >= 0) s.avoid.push(c); if (s.avoid.length > 10) s.avoid.shift(); s.dockSince = -1; goHome(b, s); s.since = g.time }
+      } else if ((b.route.length === 0 && !b.docking) || g.time - s.since > 150) { goHome(b, s); s.since = g.time }
     }
   }
   // a wave is over once nobody is still sailing out: plan the next one afresh (new target, new share of the forces)

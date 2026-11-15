@@ -4,7 +4,7 @@ import { MAX_KINGDOMS, START } from '../game/config'
 import { FACTION_NAMES } from '../game/config'
 import { GameView } from './GameView'
 import { NewGameScreen, type NewGameParams } from './NewGameScreen'
-import { installUiTheme } from './ui'
+import { installUiTheme, sharedAssets } from './ui'
 import { recordSeed } from './seedHistory'
 import { getSave } from './saves'
 
@@ -20,7 +20,7 @@ export default function App() {
   })
   useEffect(() => { if (params) recordSeed(params) }, []) // eslint-disable-line react-hooks/exhaustive-deps -- a match started from the URL is remembered too
   useEffect(() => {
-    loadAssets().then(async a => { await installUiTheme(a); setAssets(a) }).catch(e => setError(String(e)))
+    loadAssets().then(async a => { await installUiTheme(a); sharedAssets.current = a; setAssets(a) }).catch(e => setError(String(e)))
   }, [])
   const exit = useCallback(() => setParams(null), [])
   const start = useCallback((p: NewGameParams) => { recordSeed(p); setParams(p) }, [])
@@ -28,7 +28,7 @@ export default function App() {
     try {
       const s = await getSave(id)
       if (!s) throw new Error('That save is missing')
-      setParams({ ...s.meta.params, save: { json: s.json, cam: s.meta.cam } })
+      setParams({ ...s.meta.params, save: { json: s.json, cam: s.meta.cam, recording: s.recording, film: s.film, reel: s.reel } })
     } catch (e) { window.alert(`Could not load that save: ${(e as Error)?.message ?? e}`) }
   }, [])
   if (error) return <div className="menu"><div className="panel menu-card"><h1>Could not load art</h1><p className="sub">{error}</p></div></div>

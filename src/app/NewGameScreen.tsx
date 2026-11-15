@@ -8,7 +8,7 @@ import { SavesDialog } from './SavesDialog'
 import { fmtWhen, loadHistory, toParams, type SeedEntry } from './seedHistory'
 
 /** playerTowns undefined = "Auto": the generator picks a balanced size. `kingdoms` undefined = derived from the seed (10–15). */
-export type NewGameParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number; save?: { json: string; cam?: Cam } }
+export type NewGameParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number; save?: { json: string; cam?: Cam; recording?: string; film?: Uint8Array; reel?: Uint8Array } }
 const LUMBER_CHOICES = [30, 100, 300, 1000, 5000]
 
 const randomSeed = () => Math.random().toString(36).slice(2, 8).toUpperCase()
