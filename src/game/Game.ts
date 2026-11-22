@@ -3,6 +3,7 @@ import { hash2 } from './rng'
 import { logEvent, newStats, noteKills, sampleStats, spend, type GameStats } from './Stats'
 import { agitationTick, formAlliance, playerAllianceRequest, townFell, updateAgitation } from './AgitationSystem'
 import { updateAI } from './AISystem'
+import { rankInfo, canRank } from './Ranks'
 import { cargoCount, dockLifetime, dockTimeOf, mooringNear, orderSail, spawnBoat, unload, updateBoats, clearStrike, setStrike, type Shell } from './BoatSystem'
 import type { Evac } from './Evac'
 import { Recorder } from './Recorder'
@@ -68,7 +69,7 @@ export type HudSnapshot = {
   structure: { id: number; kind: string; built: boolean; progress: number; refund: number } | null
   placing: false | StructureKind
   navy: { points: number; used: number; gun: number; zum: number; zumCap: number; yards: number }
-  boat: { id: number; kind: BoatKind; open: boolean; hp: number; maxHp: number; cargo: number; cap: number; docked: boolean; docking: number; blocked: boolean; focus: ZumFocus; count: number; zumwalts: number; names: string[]; load: Stock; want: Stock; unload: Stock; trade: { a: string; b: string; leg: string } | null; armed: boolean; striking: boolean; hasStrike: boolean; picking: false | 'a' | 'b'; pct: number; owner: string; mine: boolean } | null
+  boat: { rank: ReturnType<typeof rankInfo> | null; id: number; kind: BoatKind; open: boolean; hp: number; maxHp: number; cargo: number; cap: number; docked: boolean; docking: number; blocked: boolean; focus: ZumFocus; count: number; zumwalts: number; names: string[]; load: Stock; want: Stock; unload: Stock; trade: { a: string; b: string; leg: string } | null; armed: boolean; striking: boolean; hasStrike: boolean; picking: false | 'a' | 'b'; pct: number; owner: string; mine: boolean } | null
   events: string[]
   spills: string[]
   warnings: { name: string; secs: number; immediate: boolean }[]
@@ -216,7 +217,7 @@ export class Game {
   purposes = new Map<number, number>()
   spills: { t: number; text: string }[] = []
   /** Per-kingdom AI memory (last provocation / last tower attempt, in sim seconds). */
-  aiMemo: { tower: number[]; lot: number[]; target: number[]; targetAt: number[]; dash: Map<number, number>; baseProduce: Kingdom['produce'][]; grievance: { x: number; y: number; t: number; foe: number; kind: 'land' | 'attack' }[][]; respond: Map<number, number>; lastStand: Map<number, number>; blockSince: Map<number, number>; noBlock: Map<number, number>; holdSince: Map<number, number>; ship: Map<number, { phase: 'load' | 'pickup' | 'sail' | 'stage' | 'return' | 'station' | 'hold'; pickLand?: number; since: number; home: { x: number; y: number }; town: number; avoid: number[]; dockSince?: number; escortOf?: number; starveSince?: number; lastHp?: number; hits?: number; spot?: { x: number; y: number } }>; navyAt: number[]; noSpot: number[]; harvestSaved: Map<number, HarvestMode>; expandAt: number[] } = { tower: [], lot: [], target: [], targetAt: [], dash: new Map(), baseProduce: [], grievance: [], respond: new Map(), lastStand: new Map(), blockSince: new Map(), noBlock: new Map(), holdSince: new Map(), ship: new Map(), navyAt: [], noSpot: [], harvestSaved: new Map(), expandAt: [] }
+  aiMemo: { tower: number[]; lot: number[]; target: number[]; targetAt: number[]; dash: Map<number, number>; baseProduce: Kingdom['produce'][]; grievance: { x: number; y: number; t: number; foe: number; kind: 'land' | 'attack' }[][]; respond: Map<number, number>; lastStand: Map<number, number>; blockSince: Map<number, number>; noBlock: Map<number, number>; holdSince: Map<number, number>; ship: Map<number, { phase: 'load' | 'pickup' | 'sail' | 'stage' | 'return' | 'station' | 'hold'; pickLand?: number; since: number; home: { x: number; y: number }; town: number; avoid: number[]; dockSince?: number; escortOf?: number; starveSince?: number; noSailSince?: number; lastHp?: number; hits?: number; spot?: { x: number; y: number } }>; navyAt: number[]; noSpot: number[]; harvestSaved: Map<number, HarvestMode>; expandAt: number[]; fleetFirst: Set<number>; fleetPeak: Map<number, number>; badTarget: Map<number, number> } = { tower: [], lot: [], target: [], targetAt: [], dash: new Map(), baseProduce: [], grievance: [], respond: new Map(), lastStand: new Map(), blockSince: new Map(), noBlock: new Map(), holdSince: new Map(), ship: new Map(), navyAt: [], noSpot: [], harvestSaved: new Map(), expandAt: [], fleetFirst: new Set(), fleetPeak: new Map(), badTarget: new Map() }
   /** Border violations in progress, keyed by violator*8+victim. */
   private viol = new Map<number, { since: number; seen: number; immediate: boolean }>()
   private dirty = true
@@ -349,7 +350,7 @@ export class Game {
    * routes, strikes and mooring attempts, so the navy AI picks everything up afresh on its next pass.
    */
   unstickFleets() {
-    this.aiMemo.ship.clear(); this.campaignMemo.clear(); this.navalWave.clear(); this.yardTidyAt.clear()
+    this.aiMemo.ship.clear(); this.aiMemo.fleetFirst.clear(); this.aiMemo.fleetPeak.clear(); this.aiMemo.badTarget.clear(); this.campaignMemo.clear(); this.navalWave.clear(); this.yardTidyAt.clear()
     let n = 0
     for (const b of this.boats) {
       if (this.kingdoms[b.faction].isPlayer) continue
@@ -657,7 +658,12 @@ export class Game {
   // ---------- forests ----------
   /** A tree has just been felled: it will grow back after REGROW.min..min+spread seconds (the delay is a hash of the tree and the moment, so no random stream is touched). */
   fellTree(t: Tree) {
-    t.regrowAt = this.time + REGROW.min + hash2(t.id, this.tickCount, this.world.seed) * REGROW.spread
+    // a thinned-out forest grows back faster (down to 30 % of the delay on a bare island), so a nation that has felled its own woods is not without lumber for a quarter of an hour
+    const L = this.info.landmass[t.cell]
+    let total = 0, standing = 0
+    if (L >= 0) for (const q of this.world.trees) if (this.info.landmass[q.cell] === L) { total++; if (!q.chopped) standing++ }
+    const scale = total > 0 ? 0.3 + 0.7 * Math.min(1, standing / (total * REGROW.thinBelow)) : 1
+    t.regrowAt = this.time + (REGROW.min + hash2(t.id, this.tickCount, this.world.seed) * REGROW.spread) * scale
     this.stumps.push(t.id)
     if (this.stats) this.stats.felled++
   }
@@ -1411,10 +1417,10 @@ export class Game {
     const foreign = !bs.length
     if (foreign) { // somebody else's ship: look, but no orders
       const f = all[0]
-      return { id: f.id, kind: f.kind, open: !!f.open, hp: Math.round(f.hp), maxHp: f.maxHp, cargo: cargoCount(this, f), cap: f.cap, docked: f.docked, docking: f.docking && !f.docked ? Math.min(1, f.dockT / dockTimeOf(f)) : -1, blocked: f.dockBlocked, focus: f.focus, count: 1, zumwalts: 0, names: [], load: { ...f.load }, want: { ...f.want }, unload: { ...f.unload }, trade: null, armed: false, striking: false, hasStrike: false, picking: false, pct: -1, owner: this.label(f.faction), mine: false }
+      return { rank: canRank(f.kind) ? rankInfo(f) : null, id: f.id, kind: f.kind, open: !!f.open, hp: Math.round(f.hp), maxHp: Math.round(f.maxHp), cargo: cargoCount(this, f), cap: f.cap, docked: f.docked, docking: f.docking && !f.docked ? Math.min(1, f.dockT / dockTimeOf(f)) : -1, blocked: f.dockBlocked, focus: f.focus, count: 1, zumwalts: 0, names: [], load: { ...f.load }, want: { ...f.want }, unload: { ...f.unload }, trade: null, armed: false, striking: false, hasStrike: false, picking: false, pct: -1, owner: this.label(f.faction), mine: false }
     }
     const b = bs[0]
-    return { owner: this.label(0), mine: true, id: b.id, kind: b.kind, open: !!b.open, hp: Math.round(b.hp), maxHp: b.maxHp, cargo: cargoCount(this, b), cap: b.cap, docked: b.docked, docking: b.docking && !b.docked ? Math.min(1, b.dockT / dockTimeOf(b)) : -1, blocked: b.dockBlocked, focus: b.focus, count: bs.length, zumwalts: bs.filter(q => q.kind === 'zumwalt').length, names: b.cargo.map(id => this.unitById(id)?.name ?? ''),
+    return { rank: canRank(b.kind) ? rankInfo(b) : null, owner: this.label(0), mine: true, id: b.id, kind: b.kind, open: !!b.open, hp: Math.round(b.hp), maxHp: Math.round(b.maxHp), cargo: cargoCount(this, b), cap: b.cap, docked: b.docked, docking: b.docking && !b.docked ? Math.min(1, b.dockT / dockTimeOf(b)) : -1, blocked: b.dockBlocked, focus: b.focus, count: bs.length, zumwalts: bs.filter(q => q.kind === 'zumwalt').length, names: b.cargo.map(id => this.unitById(id)?.name ?? ''),
       load: { ...b.load }, want: { ...b.want }, unload: { ...b.unload }, trade: b.trade ? { a: this.towns[b.trade.a]?.kind === 'settlement' ? 'Settlement' : 'Town', b: this.towns[b.trade.b]?.kind === 'settlement' ? 'Settlement' : 'Town', leg: b.trade.leg } : null,
       armed: b.kind === 'zumwalt' || b.kind === 'gunship', striking: this.strikeMode, hasStrike: !!b.strike, picking: this.routePick && this.routePick.boat === b.id ? this.routePick.step : false, pct: loadPercent(b) }
   }

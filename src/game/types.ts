@@ -180,6 +180,10 @@ export type Outpost = { id: number; faction: number; cx: number; cy: number; x: 
 export type BoatDir = 'up' | 'down' | 'left' | 'right'
 export type Boat = {
   id: number
+  rank?: number // gunship / Zumwalt: 0 = no rank ... 11 = brigadier general (see Ranks.ts); absent in older saves
+  xp?: number
+  pendXp?: number // XP for damage taken, banked once the encounter is over and the ship still floats
+  hitAt?: number // sim time of the last hit it took
   kind: BoatKind
   faction: number
   x: number

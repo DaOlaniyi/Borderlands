@@ -171,7 +171,8 @@ export const SHOT_REACT = { fleeBelow: 0.5, fleeTiles: 7, chaseSeconds: 4, chase
 export const REL = { coolAfter: 90, warKills: 2, warAfter: 120, declareChance: 0.12, aiWarKills: 5, aiWarAfter: 360, aiDeclareChance: 0.03, provokeAfter: 150, totalWarCapacityMult: 2, warnSeconds: 5, immediateTiles: 5 }
 
 /** A felled tree grows back after 15-25 minutes (a different delay for each tree), so lumber never runs out for good. */
-export const REGROW = { min: 900, spread: 600, retry: 60 }
+/** thinBelow: once less than this share of a landmass's trees still stands, regrowth speeds up (to 30 % of the delay on a bare island). */
+export const REGROW = { min: 900, spread: 600, retry: 60, thinBelow: 0.3 }
 
 export const PAWN = {
   speed: 56,

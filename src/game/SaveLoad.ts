@@ -78,6 +78,7 @@ export function applySave(g: Game, json: string) {
   g.sounds = []; g.fx = []; g.projectiles = []
   ensureStats(g.stats)
   for (const b of g.boats) b.open ??= false
+  g.aiMemo.fleetFirst ??= new Set(); g.aiMemo.fleetPeak ??= new Map(); g.aiMemo.badTarget ??= new Map() // (saves from before the arms race)
   g.refreshHash()
 }
 
@@ -99,6 +100,7 @@ export function restoreGame(params: SaveParams, json: string, recording?: string
   g.sounds = []; g.fx = []; g.projectiles = []
   ensureStats(g.stats)
   for (const b of g.boats) b.open ??= false
+  g.aiMemo.fleetFirst ??= new Set(); g.aiMemo.fleetPeak ??= new Map(); g.aiMemo.badTarget ??= new Map() // (saves from before the arms race)
   for (const k of g.kingdoms) { k.produce.knight ??= k.isPlayer ? false : true; k.weights.knight ??= k.isPlayer ? 1 : 1.2 } // (saves from before the knight)
   g.refreshHash()
   if (recording) { try { g.rec = new Recorder(parseRecording(recording)); g.rec.next = g.time } catch { /* an unreadable recording starts over */ } }

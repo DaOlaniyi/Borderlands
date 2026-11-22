@@ -525,6 +525,19 @@ export class Renderer {
     const lum = (parseInt(hex.slice(1, 3), 16) * 0.3 + parseInt(hex.slice(3, 5), 16) * 0.59 + parseInt(hex.slice(5, 7), 16) * 0.11) / 255
     drawEmblem(ctx, k.emblem, x, y - sz / 2, sz, hex, lum > 0.62 ? FACTION_DARK[k.color] : '#ffffff')
   }
+  /** A ship's rank insignia, on a small dark plate to the right of its kingdom badge (it scales with the camera zoom like the badge does, and is a bit bigger so the detail reads). */
+  private drawRank(ctx: CanvasRenderingContext2D, rank: number, x: number, y: number, size: number) {
+    const img = this.assets.ranks[rank]
+    if (!img) return
+    const sz = Math.min(110, Math.max(size, 20 / this.zoomNow)), H = sz * 1.55, W = sz * 2.0, pad = sz * 0.12
+    const k = Math.min((H - pad * 2) / img.height, (W - pad * 2) / img.width), w = img.width * k, h = img.height * k
+    const plateW = Math.max(w + pad * 2, H * 0.8), cx = x + sz / 2 + sz * 0.2 + plateW / 2, cy = y - sz / 2
+    ctx.save()
+    ctx.fillStyle = 'rgba(12,16,22,.78)'; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = Math.max(1, sz * 0.06)
+    ctx.beginPath(); ctx.roundRect(cx - plateW / 2, cy - H / 2, plateW, H, sz * 0.22); ctx.fill(); ctx.stroke()
+    ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h)
+    ctx.restore()
+  }
   /** Towers and lots. A garrisoned archer stands at full size on the middle of the tower's platform. */
   private drawTower(ctx: CanvasRenderingContext2D, t: Tower, time: number) {
     if (t.kind === 'boat' || t.kind === 'zumwalt' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'barge') { // a ship under construction: translucent hull on the slipway with a progress bar
@@ -575,6 +588,7 @@ export class Renderer {
     const sel = g.selection?.kind === 'boats' && g.selection.ids.includes(b.id)
     const top = y - img.height / 2 - 10
     this.badge(ctx, b.faction, x, top - 10, 18)
+    if ((b.rank ?? 0) > 0) this.drawRank(ctx, b.rank!, x, top - 10, 18)
     if (b.hp < b.maxHp - 0.5 || sel) this.bar(ctx, x, top, 50, b.hp / b.maxHp, '#78d46a')
     if (b.cargo.length && b.faction === 0) { ctx.fillStyle = 'rgba(12,16,22,.85)'; ctx.fillRect(x - 18, top + 8, 36, 13); ctx.fillStyle = '#fff'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`${b.cargo.length > 0 ? g.unitCargo(b) : 0}/${b.cap}`, x, top + 18) }
     if (b.kind === 'cargo') {

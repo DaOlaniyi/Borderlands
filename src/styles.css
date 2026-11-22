@@ -309,3 +309,10 @@ b.mk-war, b.mk-town, b.mk-elim { padding: 0 4px; border-radius: 2px; display: in
 .film-scrub { flex: 1; min-width: 80px; }
 .film-speed { display: flex; gap: 3px; } .film-speed button { color: var(--ink); cursor: pointer; background: #d4b97d; border: 2px solid #5b4630; border-radius: 6px; padding: 1px 7px; font-weight: 700; } .film-speed button.on { color: #fff; background: #3f8fe0; }
 .film-busy { position: absolute; left: 50%; top: 40%; transform: translateX(-50%); background: rgba(34, 24, 14, .9); color: #f3e6c4; padding: 10px 22px; border-radius: 10px; font-size: 16px; }
+
+.rankrow { display: flex; gap: 10px; align-items: center; margin: 4px 0; }
+.rankrow > img { height: 34px; max-width: 54px; object-fit: contain; filter: drop-shadow(0 1px 2px rgba(0,0,0,.6)); }
+.rankrow .norank { width: 34px; text-align: center; opacity: .5; font-size: 20px; }
+.rankrow > div { display: flex; flex-direction: column; gap: 2px; min-width: 190px; }
+.xpbar { height: 6px; background: #3a2a1c; border-radius: 3px; overflow: hidden; } .xpbar i { display: block; height: 100%; background: #e0b84a; }
+.rankgain { color: #6b3f00; font-weight: 700; }

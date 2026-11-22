@@ -59,6 +59,7 @@ const icon = (n: string) => assetUrl(`UI Elements/UI Elements/Icons/${n}.png`)
 const goldIcon = `${import.meta.env.BASE_URL}assets/icons/gold.png?v=${ART_V}` // tight-cropped by scripts/make-icons.py
 const meatIcon = `${import.meta.env.BASE_URL}assets/icons/meat.png?v=${ART_V}`
 const propUrl = (n: string) => `${import.meta.env.BASE_URL}assets/props/${n}.png?v=${ART_V}`
+const rankIcon = (key: string) => `${import.meta.env.BASE_URL}assets/ranks/${key}.png?v=${ART_V}`
 const BOAT_LABEL: Record<BoatKind, string> = { boat: 'Infantry boat', zumwalt: 'Zumwalt', cargo: 'Cargo boat', gunship: 'Gunship', barge: 'Barge' }
 const REL_LABEL: Record<Relation, string> = { allied: 'Allied', neutral: 'Neutral', conflict: 'In Conflict', war: 'At War', total: 'Total War' }
 
@@ -255,6 +256,17 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
             <b>{hud.boat.mine ? '' : `${hud.boat.owner}'s `}{BOAT_LABEL[hud.boat.kind]}{hud.boat.count > 1 ? ` ×${hud.boat.count}` : ''}</b>
             <span>{hud.boat.docked ? 'Docked — friendly territory around it' : hud.boat.blocked ? 'Landing blocked — enemy troops hold the beach' : hud.boat.docking >= 0 ? (hud.boat.kind === 'barge' ? `Docking… ${Math.ceil((1 - hud.boat.docking) * BARGE.dockTime)} s (nothing stops it)` : `Docking… ${Math.ceil((1 - hud.boat.docking) * 5)} s (fire interrupts it)`) : 'At sea'}{hud.boat.kind === 'barge' && hud.boat.docked ? (hud.boat.open ? ' · ramp DOWN' : ' · ramp up') : ''}{hud.boat.kind === 'zumwalt' && hud.boat.docked ? ' · cannons offline' : ''}</span>
             <div className="hpbar"><i style={{ width: `${Math.max(0, (hud.boat.hp / hud.boat.maxHp) * 100)}%` }} /></div>
+            {hud.boat.rank && (
+              <div className="rankrow" title="XP comes from hitting ships, the killing blow, and damage survived (counted once the fight is over and the ship is still afloat). Each rank adds health, damage and speed, and the gain grows with every rank.">
+                {hud.boat.rank.level > 0 ? <img src={rankIcon(hud.boat.rank.key)} alt="" /> : <span className="norank">—</span>}
+                <div>
+                  <b>{hud.boat.rank.name}</b>
+                  <div className="xpbar"><i style={{ width: `${hud.boat.rank.pct}%` }} /></div>
+                  <small>{hud.boat.rank.next < 0 ? `${hud.boat.rank.xp} XP · top rank` : `${hud.boat.rank.xp} / ${hud.boat.rank.next} XP${hud.boat.rank.pending > 0 ? ` (+${hud.boat.rank.pending} when the fight ends)` : ''}`}</small>
+                  <small className="rankgain">Health +{hud.boat.rank.bonus}% · Damage +{hud.boat.rank.bonus}% · Speed +{hud.boat.rank.bonus}%{hud.boat.rank.next >= 0 ? ` — next rank: +${hud.boat.rank.nextBonus}%` : ''}</small>
+                </div>
+              </div>
+            )}
             <span>HP {hud.boat.hp} / {hud.boat.maxHp}{hud.boat.cap > 0 ? ` · Aboard ${hud.boat.cargo}/${hud.boat.cap}${hud.boat.cargo >= hud.boat.cap ? ' (FULL)' : ''}` : ''}</span>
             {!hud.boat.mine && hud.boat.kind === 'cargo' && <span>Hold: {Math.round(hud.boat.load.lumber)} lumber · {Math.round(hud.boat.load.gold)} gold · {Math.round(hud.boat.load.meat)} meat</span>}
             {hud.boat.names.length > 0 && <small>{hud.boat.names.slice(0, 6).join(', ')}{hud.boat.names.length > 6 ? '…' : ''}</small>}

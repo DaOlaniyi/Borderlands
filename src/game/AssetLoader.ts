@@ -10,6 +10,8 @@ export type { Img, Sheet }
 const BASE = `${import.meta.env.BASE_URL}assets/ts/`
 const SHIPS = `${import.meta.env.BASE_URL}assets/ships/`
 const KNIGHT = `${import.meta.env.BASE_URL}assets/knight/`
+const RANKS_DIR = `${import.meta.env.BASE_URL}assets/ranks/`
+export const RANK_FILES = ['', 'e1', 'e2', 'cpl', 'sgt', 'ssg', 'msg', 'wo1', '2lt', 'maj', 'col', 'bg']
 const PROPS = `${import.meta.env.BASE_URL}assets/props/`
 const url = (p: string) => BASE + p.split('/').map(encodeURIComponent).join('/')
 
@@ -21,6 +23,7 @@ const url = (p: string) => BASE + p.split('/').map(encodeURIComponent).join('/')
 const FRAME_W: Record<string, number> = { foam: 192, tree: 192, bush: 128, unit: 192, lancer: 320 }
 
 export type Assets = {
+  ranks: Img[] // rank insignia by rank (index 0, no rank, is an empty placeholder)
   tileset: HTMLImageElement
   water: HTMLImageElement
   foam: Sheet
@@ -119,7 +122,9 @@ export async function loadAssets(): Promise<Assets> {
   const buildings = (fams: Img[]): Img[] => PALETTE.map(c => (c.native ? fams[NATIVE_FAMILIES.indexOf(c.native)] : recolorBuilding(fams[blueIdx], fams, c)))
   const ships = (base: Record<BoatDir, Img>, squash?: { center: number; k: number }): Record<BoatDir, Img>[] => PALETTE.map(c => { const sp = shipSpec(c); return Object.fromEntries(dirs.map(d => [d, sp ? recolorImage(base[d], sp, isShipTeam, squash) : base[d]])) as Record<BoatDir, Img> })
   const WIDE_HULL = { center: 218, k: 0.3 } // the Zumwalt and barge art mix teal, blue and navy: squeeze them toward one hue before recolouring
+  const ranks = await Promise.all(RANK_FILES.map(f => (f ? loadImage(`${RANKS_DIR}${f}.png?v=${ART_V}`) : Promise.resolve(null as unknown as Img))))
   return {
+    ranks,
     tileset, water, foam: sheet(foamImg, FRAME_W.foam), woodResource,
     trees: treeImgs.map(i => sheet(i, FRAME_W.tree)), stumps, bushes: bushImgs.map(i => sheet(i, FRAME_W.bush)), rocks,
     houses: buildings(houses), monasteries: buildings(monasteries), lots: buildings(lots), barracks: buildings(barracks), towers: buildings(towers), arrow,

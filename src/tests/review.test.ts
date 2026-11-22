@@ -37,12 +37,17 @@ describe('shipyards per landmass', () => {
     for (const [x, y] of [[8, 5], [8, 10], [8, 30], [8, 35]]) { const s = placeSettlement(g, 0, px(x), px(y)); void s }
     expect(yardQuota(g, 0, land)).toBe(1)
   })
+
 })
 
 describe('trees grow back', () => {
   it('a felled tree returns after 15-25 minutes, but waits while something stands on the spot', () => {
     const g = makeGame({ rows, towns: [[0, 22, 20], [1, 80, 20]], units: [] })
     const plant = (cx: number, cy: number) => { const t: Tree = { id: g.world.trees.length, kind: 2, x: px(cx), y: px(cy), cell: cy * g.world.w + cx, phase: 0, chopped: false, progress: 0, claimedBy: -1 }; g.world.trees.push(t); return t }
+    // (a forest that is mostly standing grows back at the normal pace)
+    const L = g.info.landmass[14 * g.world.w + 12]
+    for (let i = 0; i < 40; i++) plant(12 + (i % 8), 14 + ((i / 8) | 0)) // a stand of trees on the same island
+    expect(g.info.landmass[g.world.trees[g.world.trees.length - 1].cell]).toBe(L)
     const t = plant(14, 12)
     t.chopped = true; g.fellTree(t)
     expect(t.regrowAt! - g.time).toBeGreaterThanOrEqual(REGROW.min); expect(t.regrowAt! - g.time).toBeLessThanOrEqual(REGROW.min + REGROW.spread)
@@ -57,6 +62,16 @@ describe('trees grow back', () => {
     g.towers.push({ id: 9999, kind: 'tower', town: 0, faction: 0, cx: u.cell % g.world.w, cy: (u.cell / g.world.w) | 0, x: u.x, y: u.y, hp: 1, maxHp: 1, progress: 0, built: true, builder: -1, archer: -1 })
     g.time = u.regrowAt! + 1; stepN(g, 50)
     expect(u.chopped).toBe(true)
+  })
+
+  it('a bare island regrows its trees faster (30 % of the delay at the least)', () => {
+    const g = makeGame({ rows, towns: [[0, 22, 20], [1, 80, 20]], units: [] })
+    g.world.trees.length = 0
+    const mk = (cx: number, cy: number) => { const t: Tree = { id: g.world.trees.length, kind: 2, x: px(cx), y: px(cy), cell: cy * g.world.w + cx, phase: 0, chopped: true, progress: 0, claimedBy: -1 }; g.world.trees.push(t); return t }
+    const trees = Array.from({ length: 10 }, (_, i) => mk(12 + i, 12))
+    for (const t of trees) g.fellTree(t)
+    const last = trees[9].regrowAt! - g.time
+    expect(last).toBeGreaterThanOrEqual(REGROW.min * 0.3 - 1); expect(last).toBeLessThan(REGROW.min * 0.5 + REGROW.spread * 0.5)
   })
 })
 

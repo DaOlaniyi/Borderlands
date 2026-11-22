@@ -6,6 +6,7 @@ import { buildRoute, pathBetween } from './Routes'
 import type { Boat, BoatDir, Unit } from './types'
 import { logEvent } from './Stats'
 import { atShipyard } from './Yards'
+import { awardXp, bankSurvivalXp, canRank, rankMult, RANK_TUNE, xpForHit, xpForKill } from './Ranks'
 
 /** A shell in flight. (x1,y1) is where it lands (scattered for Zumwalts); `direct` means it lands on its target, `splash` that it bursts. */
 export type Shell = { x0: number; y0: number; x1: number; y1: number; t: number; dur: number; dmg: number; faction: number; kind: 'boat' | 'tower' | 'town' | 'unit' | 'ground'; id: number; src: number; direct: boolean; splash: boolean }
@@ -134,7 +135,7 @@ export function orderSail(g: Game, b: Boat, raw: number[]): boolean {
   if (!sea.at(goal.x, goal.y)) return false
   const raw2 = raw.slice(); raw2[raw2.length - 2] = goal.x; raw2[raw2.length - 1] = goal.y
   let route = buildRoute(sea, b.x, b.y, raw2)
-  if (!route.length) route = pathBetween(sea, b.x, b.y, goal.x, goal.y) ?? []
+  if (!route.length) route = pathBetween(sea, b.x, b.y, goal.x, goal.y, sea.w * sea.h) ?? [] // (a whole-map search: the default cap of 20 000 cells fails on a long crossing of the wide archipelago)
   if (!route.length) return false
   undock(g, b)
   b.route = route; b.routeIdx = 0; b.stuck = 0; b.docking = !!moor; b.dockT = 0; b.dockBlocked = false
@@ -204,21 +205,26 @@ function boarding(g: Game, b: Boat) {
 }
 
 // ---------------------------------------------------------------- damage & sinking
-export function damageBoat(g: Game, b: Boat, amount: number, attackerFaction: number, naval = false) {
+export function damageBoat(g: Game, b: Boat, amount: number, attackerFaction: number, naval = false, src = -1) {
   if (b.hp <= 0) return
   const wasHealthy = b.hp >= b.maxHp * ZUMWALT.fireBelow
   if (b.kind === 'barge' && !naval) amount *= BARGE.landDamage // (armoured against everything on land: only ships hurt it properly)
+  const dealt = Math.min(amount, b.hp) // (overkill earns nothing)
   b.hp -= amount; b.flash = 0.15; if (b.kind !== 'barge') b.dockT = 0 // fire interrupts the mooring (a barge presses on)
   if (attackerFaction >= 0 && attackerFaction !== b.faction) {
     g.diplomacy.fighting(attackerFaction, b.faction, g.time)
-    if (g.diplomacy.get(attackerFaction, b.faction) === 'neutral') g.diplomacy.set(attackerFaction, b.faction, 'conflict', g.time, `${g.label(attackerFaction)} fired on a ${g.label(b.faction)} ship — relations: In Conflict`) // shooting at somebody's ships starts a conflict at once
+    if (g.diplomacy.get(attackerFaction, b.faction) === 'neutral') g.diplomacy.set(attackerFaction, b.faction, 'conflict', g.time, `${g.label(attackerFaction)} fired on a ${g.label(b.faction)} ship — relations: In Conflict`) // shooting at somebo
   }
+  // ranks: the shooter earns XP for the damage; the target stores what it took and is paid for it only if the encounter ends with it still afloat
+  if (src >= 0 && attackerFaction !== b.faction) { const shooter = g.boatById(src); if (shooter && shooter.hp > 0 && canRank(shooter.kind)) awardXp(g, shooter, xpForHit(b, dealt)) }
+  if (canRank(b.kind) && attackerFaction !== b.faction) { b.pendXp = (b.pendXp ?? 0) + dealt * RANK_TUNE.taken; b.hitAt = g.time }
   g.fx.push({ kind: 'hit', x: b.x, y: b.y - 10, t: 0 })
   if (b.kind === 'zumwalt' && b.hp > 0 && b.hp < b.maxHp * ZUMWALT.fireBelow && (naval || wasHealthy)) b.fireT = ZUMWALT.fireSeconds // (cosmetic) set alight on dropping below 15 %, and again by every later hit from a ship's guns
-  if (b.hp <= 0) sinkBoat(g, b, attackerFaction)
+  if (b.hp <= 0) sinkBoat(g, b, attackerFaction, src)
 }
 
-export function sinkBoat(g: Game, b: Boat, by = -1) {
+export function sinkBoat(g: Game, b: Boat, by = -1, src = -1) {
+  if (src >= 0 && by !== b.faction) { const killer = g.boatById(src); if (killer && killer.hp > 0 && canRank(killer.kind)) awardXp(g, killer, xpForKill(b)) } // the killing blow is worth extra
   if (by >= 0 && by !== b.faction) { // sinking three of a nation's ships is a declaration of war
     const key = by * 100 + b.faction, n = (g.shipSinkings.get(key) ?? 0) + 1
     g.shipSinkings.set(key, n)
@@ -369,7 +375,7 @@ function fire(g: Game, b: Boat) {
   const direct = tg.kind !== 'ground' && g.rng.next() < zumwaltDirectChance(d)
   let ix = tg.x, iy = tg.y
   if (!direct) { const a = g.rng.next() * Math.PI * 2, r = zumwaltSpread(d) * Math.sqrt(g.rng.next()); ix += Math.cos(a) * r; iy += Math.sin(a) * r }
-  g.shells.push({ x0: mx, y0: my - 6, x1: ix, y1: iy - 10, t: 0, dur: 0.3 + d / 1800, dmg: SHELL_DAMAGE * zumwaltFalloff(d), faction: b.faction, kind: tg.kind, id: tg.id, src: b.id, direct, splash: true })
+  g.shells.push({ x0: mx, y0: my - 6, x1: ix, y1: iy - 10, t: 0, dur: 0.3 + d / 1800, dmg: SHELL_DAMAGE * zumwaltFalloff(d) * rankMult(b), faction: b.faction, kind: tg.kind, id: tg.id, src: b.id, direct, splash: true })
   g.sounds.push({ name: 'cannon', x: mx, y: my })
   g.fx.push({ kind: 'hit', x: mx, y: my - 8, t: 0 })
   return true
@@ -390,7 +396,7 @@ function burst(g: Game, s: Shell) {
   let hitSomething = false
   const falloff = (d: number) => Math.max(0.25, 1 - d / R * 0.75)
   if (direct) {
-    if (s.kind === 'boat') { const t = g.boatById(s.id); if (t) { damageBoat(g, t, s.dmg, s.faction, true); hitSomething = true } }
+    if (s.kind === 'boat') { const t = g.boatById(s.id); if (t) { damageBoat(g, t, s.dmg, s.faction, true, s.src); hitSomething = true } }
     else if (s.kind === 'tower') { const t = g.towerById(s.id); if (t) { damageTower(g, t, s.dmg * ZUMWALT.buildingMult, s.faction); hitSomething = true } }
     else if (s.kind === 'town') { const t = g.towns[s.id]; if (t && !t.ruined) { shellTown(g, t, s.dmg * ZUMWALT.buildingMult, s.faction, true); hitSomething = true } }
     else if (s.kind === 'unit') { const t = g.unitById(s.id); if (t && t.state !== 'dead' && t.inTower < 0) { damageUnit(g, t, s.dmg, s.faction, { x: s.x0, y: s.y0 }); hitSomething = true; if ((t.state as string) !== 'dead') g.shelled(t, s.src, s.x0, s.y0) } }
@@ -410,7 +416,7 @@ function burst(g: Game, s: Shell) {
   }
   for (const t of [...g.towers]) if (g.hostile(s.faction, t.faction) && !(direct && s.kind === 'tower' && t.id === s.id) && Math.hypot(t.x - ix, t.y - iy) <= R + TOWER.radius) { damageTower(g, t, splashDmg * ZUMWALT.buildingMult * falloff(Math.hypot(t.x - ix, t.y - iy)), s.faction); hitSomething = true }
   for (const t of [...g.towns]) if (!t.ruined && g.hostile(s.faction, t.owner) && !(direct && s.kind === 'town' && t.id === s.id) && Math.hypot(t.x - ix, t.y - iy) <= R + TOWN.captureRadius * 0.7) { shellTown(g, t, splashDmg * ZUMWALT.buildingMult * falloff(Math.hypot(t.x - ix, t.y - iy)), s.faction, true); hitSomething = true }
-  for (const o of [...g.boats]) if (g.hostile(s.faction, o.faction) && !(direct && s.kind === 'boat' && o.id === s.id) && Math.hypot(o.x - ix, o.y - iy) <= R + boatRadius(o) * 0.5) { damageBoat(g, o, splashDmg * falloff(Math.hypot(o.x - ix, o.y - iy)), s.faction, true); hitSomething = true }
+  for (const o of [...g.boats]) if (g.hostile(s.faction, o.faction) && !(direct && s.kind === 'boat' && o.id === s.id) && Math.hypot(o.x - ix, o.y - iy) <= R + boatRadius(o) * 0.5) { damageBoat(g, o, splashDmg * falloff(Math.hypot(o.x - ix, o.y - iy)), s.faction, true, s.src); hitSomething = true }
   if (!hitSomething && !g.isLandAt(ix, iy)) g.fx.push({ kind: 'splash', x: ix, y: iy, t: 0 })
 }
 
@@ -423,7 +429,7 @@ function landShells(g: Game, dt: number) {
   for (const s of landed) {
     g.fx.push({ kind: 'boom', x: s.x1, y: s.y1 + 10, t: 0 }); g.sounds.push({ name: 'boom', x: s.x1, y: s.y1 })
     if (s.splash) burst(g, s)
-    else if (s.kind === 'boat') { const t = g.boatById(s.id); if (t) damageBoat(g, t, s.dmg, s.faction, true); else g.fx.push({ kind: 'splash', x: s.x1, y: s.y1, t: 0 }) } // a gunship's round
+    else if (s.kind === 'boat') { const t = g.boatById(s.id); if (t) damageBoat(g, t, s.dmg, s.faction, true, s.src); else g.fx.push({ kind: 'splash', x: s.x1, y: s.y1, t: 0 }) } // a gunship's round
     else if (s.kind === 'tower') { const t = g.towerById(s.id); if (t) damageTower(g, t, s.dmg, s.faction) }
     else if (s.kind === 'town') { const t = g.towns[s.id]; if (t && !t.ruined) shellTown(g, t, s.dmg, s.faction) }
     else if (s.kind === 'unit') { const t = g.unitById(s.id); if (t && t.state !== 'dead' && t.inTower < 0) damageUnit(g, t, s.dmg, s.faction, { x: s.x0, y: s.y0 }) }
@@ -441,13 +447,15 @@ export function updateBoats(g: Game, dt: number) {
   for (const b of [...g.boats]) {
     b.px = b.x; b.py = b.y
     if (b.flash > 0) b.flash -= dt
+    if (b.pendXp) bankSurvivalXp(g, b)
     if ((b.fireT ?? 0) > 0) b.fireT = b.hp >= b.maxHp * ZUMWALT.fireBelow ? 0 : Math.max(0, b.fireT - dt) // (repairs put the fire out)
     if (b.docked && b.hp < b.maxHp && atShipyard(g, b)) b.hp = Math.min(b.maxHp, b.hp + b.maxHp * 0.012 * dt) // only a ship moored beside one of its own shipyards is mended (about 80 s from wreck to whole)
     const moving = b.route.length > 0 && b.routeIdx < b.route.length / 2
     if (b.noDock && b.docking && !b.docked) { b.docking = false; b.dockT = 0; b.dockBlocked = false } // a ship told to stay afloat gives up any mooring attempt
     if (!b.docked) {
       const st = boatStats(b.kind)
-      const sailing = followRoute(b, dt, st.speed, st.accel, 60, 70, sea, 40, 14)
+      const rm = rankMult(b)
+      const sailing = followRoute(b, dt, st.speed * rm, st.accel * rm, 60, 70, sea, 40, 14) // (a ranked ship is faster)
       // watchdog: a ship that wants to move but barely does (wedged against a coast corner at its last waypoint, say) is re-planned from the centre of
       // its water cell; if there is no way through, it gives the order up instead of sitting there for ever
       if (sailing && Math.hypot(b.vx, b.vy) < 6) b.stallT += dt; else b.stallT = 0
@@ -456,7 +464,7 @@ export function updateBoats(g: Game, dt: number) {
         const ex = b.route[b.route.length - 2], ey = b.route[b.route.length - 1]
         const cx = Math.floor(b.x / TILE), cy = Math.floor(b.y / TILE)
         if (isWaterCell(g, cx, cy)) { b.x = (cx + 0.5) * TILE; b.y = (cy + 0.5) * TILE }
-        const fresh = pathBetween(seaWalkable(g), b.x, b.y, ex, ey)
+        const fresh = pathBetween(seaWalkable(g), b.x, b.y, ex, ey, g.world.w * g.world.h)
         if (fresh && fresh.length >= 2) { b.route = fresh; b.routeIdx = 0; b.stuck = 0 }
         else { b.route = []; b.routeIdx = 0; b.docking = false; b.vx = b.vy = 0 }
       }
@@ -740,7 +748,7 @@ function gunshipFire(g: Game, b: Boat, dt: number) {
   b.dir = Math.abs(tg.x - b.x) >= Math.abs(tg.y - b.y) ? (tg.x < b.x ? 'left' : 'right') : (tg.y < b.y ? 'up' : 'down')
   if (b.gunCd > 0) return
   b.gunCd = GUNSHIP.cooldown
-  g.shells.push({ x0: b.x, y0: b.y - 8, x1: tg.x, y1: tg.y - 6, t: 0, dur: 0.2 + Math.hypot(tg.x - b.x, tg.y - b.y) / 1800, dmg: GUNSHIP.damage, faction: b.faction, kind: tg.kind, id: tg.id, src: b.id, direct: true, splash: false })
+  g.shells.push({ x0: b.x, y0: b.y - 8, x1: tg.x, y1: tg.y - 6, t: 0, dur: 0.2 + Math.hypot(tg.x - b.x, tg.y - b.y) / 1800, dmg: GUNSHIP.damage * rankMult(b), faction: b.faction, kind: tg.kind, id: tg.id, src: b.id, direct: true, splash: false })
   g.sounds.push({ name: 'cannon', x: b.x, y: b.y })
 }
 

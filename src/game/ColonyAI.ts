@@ -30,6 +30,7 @@ export function manageColonies(g: Game, k: number, mine: Unit[]) {
   upgradeSettlements(g, k)
   manageTrade(g, k)
   managePirates(g, k)
+  if (g.aiMemo.fleetFirst.has(k)) return // saving for a Zumwalt (arms race / lost fleet): no new colonies until the fleet is back
   runColony(g, k, mine, 0)
   runColony(g, k, mine, 1)
 }
@@ -139,7 +140,7 @@ function managePirates(g: Game, k: number) {
   const kingdom = g.kingdoms[k]
   const ships = g.boats.filter(b => b.faction === k && b.kind === 'gunship')
   const sites = g.towers.filter(s => s.faction === k && s.kind === 'gunship').length
-  const gwant = gunshipsWanted(g, k)
+  const gwant = g.aiMemo.fleetFirst.has(k) ? Math.min(gunshipsWanted(g, k), g.boats.filter(b => b.faction === k && b.kind === 'zumwalt' && b.hp > 0).length) : gunshipsWanted(g, k) // (saving for a Zumwalt: one escort each, no more)
   if ((g.time > 90 || g.navalThreat.has(k)) && ships.length + sites < gwant && !sites && kingdom.lumber >= GUNSHIP.cost + 30) aiNote(g, k, 'gunship', placeShip(g, k, 'gunship') ? 'ok' : 'block', 'Laying down a gunship (or no free spot)')
   else if (ships.length + sites >= gwant) aiNote(g, k, 'gunship', 'ok', gwant === 0 ? 'None wanted (no Zumwalts to escort)' : `Gunships: ${ships.length}/${gwant}`)
   else if (g.time <= 90 && !g.navalThreat.has(k)) aiNote(g, k, 'gunship', 'wait', 'Too early (starts at 90s)')

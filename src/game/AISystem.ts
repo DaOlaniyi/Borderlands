@@ -655,6 +655,7 @@ function manageStructures(g: Game, k: number, hasTowns: boolean) {
   const ready = g.ready[k]
   if (!hasTowns || g.time - (g.aiMemo.tower[k] ?? -999) < (ready ? AI.towerEvery / 2 : AI.towerEvery)) return
   g.aiMemo.tower[k] = g.time
+  if (g.aiMemo.fleetFirst.has(k)) return // the fleet is being rebuilt or caught up with the enemy's: lumber goes to the Zumwalt, not to lots and towers
   const { w, h } = g.world
 
   // one lot per town (but not while we are saving for a boat or a colony: those come first)
@@ -777,6 +778,18 @@ export function placeShip(g: Game, k: number, kind: BoatKind, near?: { x: number
  * towers are done. A Zumwalt costs more than a 'med' stockpile allows, so a nation saving for one switches its pawns to unlimited
  * harvesting until it can pay (and goes back afterwards).
  */
+/** Zumwalts afloat of the strongest nation `k` is at war with: the fleet it has to match. */
+export function enemyFleet(g: Game, k: number): number {
+  let top = 0
+  for (const o of g.kingdoms) {
+    if (o.id === k || !o.alive) continue
+    const r = g.diplomacy.get(k, o.id)
+    if (r !== 'war' && r !== 'total') continue
+    top = Math.max(top, g.boats.filter(b => b.faction === o.id && b.kind === 'zumwalt' && b.hp > 0).length)
+  }
+  return top
+}
+
 function manageFleet(g: Game, k: number, towns: number, atWar = false, underNavalAttack = false, diploWar = false) {
   const kingdom = g.kingdoms[k], saved = g.aiMemo.harvestSaved
   const imperial = kingdom.temperament === 'imperialist' || (diploWar && kingdom.temperament === 'pacifist')
@@ -790,14 +803,34 @@ function manageFleet(g: Game, k: number, towns: number, atWar = false, underNava
   if (imperial) want = Math.min(6, 2 + Math.floor(towns / 3) + (atWar ? 1 : 0)) // for an imperialist Zumwalts are a top objective
   if (underNavalAttack && towns >= 1) want = Math.max(want, 2) // attacked from the sea: answer with warships of our own
   const have = g.boats.filter(b => b.faction === k && b.kind === 'zumwalt').length + g.towers.filter(t => t.faction === k && t.kind === 'zumwalt').length
-  // a squad is finished before the next Zumwalt is laid down: every Zumwalt has three gunships (built or on the stocks) unless the naval point budget cannot afford more
-  const gunCount = g.boats.filter(b => b.faction === k && b.kind === 'gunship' && b.hp > 0).length + g.towers.filter(t => t.faction === k && t.kind === 'gunship' && !t.built).length
-  const squadsFull = have === 0 || gunCount >= 3 * have || !navalBudget(g, k).canGunship
-  const wants = want > have && squadsFull && (underNavalAttack || g.time > (imperial ? 60 : AI.navyAfter)) && (underNavalAttack || imperial || (diploWar && lostZums) || structuresDone(g, k)) && !g.towers.some(t => t.faction === k && t.kind === 'zumwalt')
   const need = ZUMWALT.cost + AI.zumReserve
+  // arms race: at war, a nation matches the strongest enemy fleet (at least as many Zumwalts) and may go one better when it can pay at once (never more),
+  // and a fleet that was sunk is rebuilt (the peak it had this war) before anything else is bought
+  const peak = g.aiMemo.fleetPeak, foeFleet = diploWar ? enemyFleet(g, k) : 0
+  if (diploWar) peak.set(k, Math.max(peak.get(k) ?? 0, have)); else peak.delete(k)
+  let behind = 0 // Zumwalts short of what the war demands: while above 0 lumber goes to the fleet first
+  if (diploWar && towns >= 2) {
+    if (foeFleet > 0) {
+      want = Math.max(foeFleet, Math.min(want, foeFleet + 1))
+      if (want > foeFleet && (have < foeFleet || kingdom.lumber < need)) want = foeFleet // the extra one only when we have matched them and can pay for it now
+      behind = Math.max(0, foeFleet - have)
+    } else if (lostZums) {
+      const rebuild = Math.min(3, peak.get(k) ?? 0)
+      want = Math.max(want, rebuild)
+      behind = Math.max(0, rebuild - have)
+    }
+  }
+  // a squad is finished before the next Zumwalt is laid down: every Zumwalt has three gunships (built or on the stocks) unless the naval point budget cannot afford more;
+  // a nation behind in the race settles for one gunship per Zumwalt, hulls first
+  const gunCount = g.boats.filter(b => b.faction === k && b.kind === 'gunship' && b.hp > 0).length + g.towers.filter(t => t.faction === k && t.kind === 'gunship' && !t.built).length
+  const squadsFull = have === 0 || gunCount >= (behind > 0 ? have : 3 * have) || !navalBudget(g, k).canGunship
+  const canBuild = navalBudget(g, k).canZumwalt
+  const wants = want > have && squadsFull && canBuild && (underNavalAttack || g.time > (imperial ? 60 : AI.navyAfter)) && (underNavalAttack || imperial || (diploWar && (lostZums || foeFleet > 0)) || structuresDone(g, k)) && !g.towers.some(t => t.faction === k && t.kind === 'zumwalt')
+  if (behind > 0 && canBuild) g.aiMemo.fleetFirst.add(k); else g.aiMemo.fleetFirst.delete(k)
   if (!wants) {
     if (want <= have) aiNote(g, k, 'zumwalt', 'ok', want === 0 ? 'None wanted (too few towns)' : `Fleet complete: ${have}/${want} Zumwalts`)
     else if (g.towers.some(t => t.faction === k && t.kind === 'zumwalt')) aiNote(g, k, 'zumwalt', 'ok', 'A Zumwalt is under construction')
+    else if (!canBuild) aiNote(g, k, 'zumwalt', 'block', `Naval limit reached (${have}/${want} Zumwalts wanted)`)
     else if (!underNavalAttack && g.time <= (imperial ? 60 : AI.navyAfter)) aiNote(g, k, 'zumwalt', 'wait', `Too early (starts at ${imperial ? 60 : AI.navyAfter}s)`)
     else aiNote(g, k, 'zumwalt', 'wait', `Lots and border towers first (${have}/${want} Zumwalts wanted)`)
   } else if (kingdom.lumber < need) aiNote(g, k, 'zumwalt', 'block', `Saving lumber: ${Math.floor(kingdom.lumber)} / ${need}`)
@@ -891,7 +924,8 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
   const myBoats = g.boats.filter(b => b.faction === k)
   const homeless = !g.towns.some(t => t.owner === k && !t.ruined)
   // townless kingdoms look for any town not held by an ally; the rest only cross the sea to a town of a nation they are at war with
-  const overseas = homeless ? g.towns.filter(t => !t.ruined && !g.diplomacy.allied(k, t.owner) && !mine.some(u => landmassAt(g.world, u.x, u.y) === landmassAt(g.world, t.x, t.y))) : seaEnemy
+  const overseasAll = homeless ? g.towns.filter(t => !t.ruined && !g.diplomacy.allied(k, t.owner) && !mine.some(u => landmassAt(g.world, u.x, u.y) === landmassAt(g.world, t.x, t.y))) : seaEnemy
+  const overseas = overseasAll.filter(t => (g.aiMemo.badTarget.get(k * 10000 + t.id) ?? -1) < g.time) // (a town no barge could sail to is left alone for a few minutes)
   // ---- plan the expedition: the enemy town nearest the coast, and enough boats to out-number everyone who can meet us there ----
   const maxB = maxBarges(g, k)
   const mobile = mine.filter(u => u.type !== 'archer' && !u.cutOff)
@@ -1071,6 +1105,13 @@ function manageNavy(g: Game, k: number, warFoes: number[], enemyTowns: Town[], s
           if (st && orderSail(g, b, [st.x, st.y])) { s.phase = 'stage'; s.since = g.time; s.town = nearest.id; s.home = home; s.dockSince = -1; s.lastHp = b.hp; s.hits = 0; s.spot = st; ex.launched = true }
           else b.noDock = false
         }
+        if (s.phase === 'load') { // it could not sail (no route to any landing beach): it does not sit there with its troops for ever
+          s.noSailSince = s.noSailSince && s.noSailSince > 0 ? s.noSailSince : g.time
+          if (g.time - s.noSailSince > 45) {
+            g.aiMemo.badTarget.set(k * 10000 + nearest.id, g.time + 300); g.expeditions.delete(k); g.invadeWait.delete(k); s.noSailSince = -1
+            aiNote(g, k, 'barge', 'block', `No sea route to a landing at ${nearest.name ?? 'the target'}: trying another target`)
+          }
+        } else s.noSailSince = -1
       } else if (cargoCount(g, b) === 0 && g.time - s.since > 150) s.since = g.time
     } else if (s.phase === 'pickup') { // sailing to another holding to take troops aboard there; the ordinary loading logic takes over once it is moored
       b.noDock = false

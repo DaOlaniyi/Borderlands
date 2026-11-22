@@ -35,7 +35,7 @@ export function setTradeRoute(g: Game, b: Boat, a: number, bTown: number, plan: 
   if (ta.land === tb.land) return 'Both ports are on the same landmass'
   const pa = portFor(g, ta), pb = portFor(g, tb)
   if (!pa || !pb) return 'A port needs open water beside your own coast'
-  const path = pathBetween(seaWalkable(g), pa.x, pa.y, pb.x, pb.y)
+  const path = pathBetween(seaWalkable(g), pa.x, pa.y, pb.x, pb.y, g.world.w * g.world.h)
   if (!path) return 'No sea route between those ports'
   b.trade = { a, b: bTown, leg: 'toA', plan: { ...plan }, path, wait: 0, back: back ? { ...back } : undefined }
   b.want = emptyStock()

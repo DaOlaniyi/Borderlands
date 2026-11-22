@@ -58,11 +58,11 @@ export function clearLine(ok: Walkable, x0: number, y0: number, x1: number, y1: 
 const cellOf = (ok: Walkable, x: number, y: number) => { const cx = Math.floor(x / TILE), cy = Math.floor(y / TILE); return cx < 0 || cy < 0 || cx >= ok.w || cy >= ok.h ? -1 : cy * ok.w + cx }
 
 /** Route from (x0,y0) to (x1,y1) over walkable cells: direct if clear, else a BFS cell path string-pulled into few points. */
-export function pathBetween(ok: Walkable, x0: number, y0: number, x1: number, y1: number): number[] | null {
+export function pathBetween(ok: Walkable, x0: number, y0: number, x1: number, y1: number, maxNodes?: number): number[] | null {
   if (clearLine(ok, x0, y0, x1, y1)) return [x1, y1]
   const a = cellOf(ok, x0, y0), b = cellOf(ok, x1, y1)
   if (a < 0 || b < 0) return null
-  const cells = bfsPath(ok.w, ok.h, a, b, ok.cell)
+  const cells = bfsPath(ok.w, ok.h, a, b, ok.cell, maxNodes)
   if (!cells) return null
   const pts: number[] = []
   for (let k = 1; k < cells.length; k++) pts.push((cells[k] % ok.w + 0.5) * TILE, (Math.floor(cells[k] / ok.w) + 0.5) * TILE)
