@@ -2,6 +2,7 @@ import { DEFAULT_KINGDOMS, TOTAL_KINGDOMS, islandScale, kingdomsForSeed, MAP, MA
 import { worldInfo } from './WorldInfo'
 import { N4, N8, countComponents, inBounds, largestComponent } from './Grid'
 import { hash2, hashSeed, makeRng, type Rng } from './rng'
+import { makeStamp, type Stamp } from './DynamicIslands'
 import type { Decor, GoldSpec, Tree, TreeKind, TownSpawn, World } from './types'
 
 export const MIN_TOWN_SEP = 9 // minimum distance between towns of different kingdoms
@@ -331,7 +332,7 @@ export const isEdgeConnected = (world: World) => countComponents(world.land, wor
 export type Blueprint = { cx: number; cy: number; r: number; kind: 'large' | 'medium' | 'small' | 'islet'; aspect: number; rot: number; seed: number }
 
 /** Where the islands go: big ones first, then smaller ones in the gaps, then curved chains of tiny islets between them. */
-export function planIslands(rng: Rng, size: number, ring?: { keep: (cx: number, cy: number, r: number) => boolean }): Blueprint[] {
+export function planIslands(rng: Rng, size: number, ring?: { keep: (cx: number, cy: number, r: number) => boolean }, dynamic = false): Blueprint[] {
   const out: Blueprint[] = []
   const free = (cx: number, cy: number, r: number, gap: number) => (!ring || ring.keep(cx, cy, r)) && out.every(o => Math.hypot(o.cx - cx, o.cy - cy) >= (r + o.r) * (o.kind === 'islet' || gap < 1.2 ? gap : Math.max(gap, 1.3)) + 3)
   const add = (kind: Blueprint['kind'], lo: number, hi: number, gap: number, tries = 500): Blueprint | null => {
@@ -360,19 +361,37 @@ export function planIslands(rng: Rng, size: number, ring?: { keep: (cx: number, 
   for (let c = 0, chains = ring ? rng.int(8, 11) : rng.int(4, 6); c < chains; c++) {
     let x = rng.next() * size, y = rng.next() * size, ang = rng.next() * Math.PI * 2, bend = (rng.next() - 0.5) * 0.5
     for (let i = 0, n = rng.int(6, 10); i < n; i++) {
-      const r = 3.4 + rng.next() * 3.4
+      const taper = dynamic ? 0.55 + 0.45 * Math.sin(Math.PI * (i + 0.5) / n) : 1 // (dynamic worlds: an arc of islets that swells in the middle, like a volcanic chain)
+      const r = (3.4 + rng.next() * 3.4) * taper
       if (x > r + 3 && y > r + 3 && x < size - r - 3 && y < size - r - 3 && free(x, y, r, 1.05)) out.push({ cx: x, cy: y, r, kind: 'islet', aspect: 0.8 + rng.next() * 0.5, rot: rng.next() * Math.PI, seed: rng.int(1, 1e9) })
       const step = 7 + rng.next() * 5
-      ang += bend + (rng.next() - 0.5) * 0.5; x += Math.cos(ang) * step; y += Math.sin(ang) * step
+      ang += bend * (dynamic ? 1.8 : 1) + (rng.next() - 0.5) * 0.5; x += Math.cos(ang) * step; y += Math.sin(ang) * step
     }
   }
   return out
 }
 
+/** Clear every land cell within `half` tiles of the segment: a channel of open water. */
+function carveChannel(m: Uint8Array, w: number, h: number, ch: { x0: number; y0: number; x1: number; y1: number; half: number }) {
+  const ex = ch.x1 - ch.x0, ey = ch.y1 - ch.y0, l2 = ex * ex + ey * ey || 1
+  for (let y = Math.max(2, Math.floor(Math.min(ch.y0, ch.y1) - ch.half - 1)); y <= Math.min(h - 3, Math.ceil(Math.max(ch.y0, ch.y1) + ch.half + 1)); y++) for (let x = Math.max(2, Math.floor(Math.min(ch.x0, ch.x1) - ch.half - 1)); x <= Math.min(w - 3, Math.ceil(Math.max(ch.x0, ch.x1) + ch.half + 1)); x++) {
+    const u = Math.max(0, Math.min(1, ((x + 0.5 - ch.x0) * ex + (y + 0.5 - ch.y0) * ey) / l2))
+    if (Math.hypot(x + 0.5 - (ch.x0 + ex * u), y + 0.5 - (ch.y0 + ey * u)) <= ch.half * (0.8 + 0.5 * hash2(x, y, 4141))) m[y * w + x] = 0 // (ragged edges, never narrower than ~80 % of the width)
+  }
+}
+
 /** The land mask for a set of blueprints: each island is a noise-warped, slightly stretched blob; their union is smoothed. */
-export function landFromBlueprints(bps: Blueprint[], w: number, h: number, seed: number): Uint8Array {
+export function landFromBlueprints(bps: Blueprint[], w: number, h: number, seed: number, dynamic = false): Uint8Array {
   let m: Uint8Array = new Uint8Array(w * h)
+  const stamps: Stamp[] = []
   for (const b of bps) {
+    if (dynamic && b.kind !== 'islet') { // a special shape (ring, crescent, ridge, dumbbell) or an improved blob: see DynamicIslands.ts
+      const st = makeStamp(b); stamps.push(st)
+      const R = Math.ceil(st.reach) + 2
+      for (let y = Math.max(2, Math.floor(b.cy - R)); y <= Math.min(h - 3, Math.ceil(b.cy + R)); y++) for (let x = Math.max(2, Math.floor(b.cx - R)); x <= Math.min(w - 3, Math.ceil(b.cx + R)); x++) if (st.value(x, y) > 0.2) m[y * w + x] = 1
+      for (const rk of st.rocks) for (let y = Math.max(2, Math.floor(rk.y - rk.r - 1)); y <= Math.min(h - 3, Math.ceil(rk.y + rk.r + 1)); y++) for (let x = Math.max(2, Math.floor(rk.x - rk.r - 1)); x <= Math.min(w - 3, Math.ceil(rk.x + rk.r + 1)); x++) if (Math.hypot(x + 0.5 - rk.x, y + 0.5 - rk.y) < rk.r * (0.85 + 0.3 * hash2(x, y, b.seed))) m[y * w + x] = 1
+      continue
+    }
     const ox = hash2(1, 2, b.seed) * 100, oy = hash2(3, 4, b.seed) * 100
     const scale = 5.5 * Math.max(1, (2 * b.r) / 50), amp = b.kind === 'islet' ? 0.9 : 1.9 * Math.min(1, 0.5 + b.r / 40)
     const R = Math.ceil(b.r * 1.6) + 2, c = Math.cos(b.rot), sn = Math.sin(b.rot), warp = Math.min(9, b.r * 0.6)
@@ -388,6 +407,7 @@ export function landFromBlueprints(bps: Blueprint[], w: number, h: number, seed:
     if (ix > 1 && iy > 1 && ix < w - 2 && iy < h - 2) m[iy * w + ix] = 1
   }
   m = smoothMask(smoothMask(m, w, h), w, h)
+  for (const st of stamps) for (const ch of st.channels) carveChannel(m, w, h, ch) // a lagoon's mouth is always open water, wide enough for a Zumwalt
   fillSmallLakes(m, w, h, 6)
   fixDiagonals(m, w, h, seed)
   removeSpurs(m, w, h)
@@ -483,11 +503,11 @@ export function placeGold(world: World, rng: Rng, spawns: TownSpawn[]): GoldSpec
  * and the outer ring gets its own islands and extra kingdoms (ids after the original ones) so a game holds TOTAL_KINGDOMS in all.
  * An explicit kingdomCount of 15 or fewer keeps the old single-core game; larger counts add ring kingdoms up to that many.
  */
-export function generateArchipelago(seedInput: string | number, kingdomCount?: number, playerTowns?: number): Generated {
+export function generateArchipelago(seedInput: string | number, kingdomCount?: number, playerTowns?: number, dynamic = false): Generated {
   const seed = typeof seedInput === 'number' ? seedInput >>> 0 : hashSeed(seedInput)
   const total = Math.max(2, Math.min(MAX_KINGDOMS, kingdomCount ?? TOTAL_KINGDOMS))
   const baseCount = kingdomCount !== undefined && kingdomCount <= DEFAULT_KINGDOMS.max ? total : Math.min(total, kingdomsForSeed(seed))
-  const core = generateCore(seed, baseCount, playerTowns)
+  const core = generateCore(seed, baseCount, playerTowns, dynamic)
   const size = MAP.size, c = MAP.core, off = (size - c) >> 1
   const land = new Uint8Array(size * size)
   for (let y = 0; y < c; y++) for (let x = 0; x < c; x++) land[(y + off) * size + x + off] = core.world.land[y * c + x]
@@ -504,7 +524,7 @@ export function generateArchipelago(seedInput: string | number, kingdomCount?: n
     let ringWorld: World | null = null, ringSpawns: TownSpawn[] = []
     for (let attempt = 0; attempt < 12 && !ringWorld; attempt++) {
       const rng = makeRng((seed ^ 0x2f6e2b1) + attempt * 104729)
-      const ringLand = landFromBlueprints(planIslands(rng, size, { keep }), size, size, seed + attempt + 77)
+      const ringLand = landFromBlueprints(planIslands(rng, size, { keep }, dynamic), size, size, seed + attempt + 77, dynamic)
       for (let y = lo; y <= hi; y++) for (let x = lo; x <= hi; x++) ringLand[y * size + x] = 0
       const rw: World = { seed: seed ^ 0x2f6e2b1, w: size, h: size, land: ringLand, trees: [], decor: [], island: world.island }
       if (worldInfo(rw).sizes.filter(n => n >= 260).length >= Math.min(extra, 4) || attempt === 11) { ringWorld = rw; if (attempt < 11) break }
@@ -526,13 +546,13 @@ export function generateArchipelago(seedInput: string | number, kingdomCount?: n
   return { world, spawns }
 }
 
-function generateCore(seed: number, kcount: number, playerTowns?: number): Generated {
+function generateCore(seed: number, kcount: number, playerTowns?: number, dynamic = false): Generated {
   const size = MAP.core
   let world: World | null = null
   for (let attempt = 0; attempt < 12 && !world; attempt++) {
     const rng = makeRng(seed + attempt * 7919)
-    const bps = planIslands(rng, size)
-    const land = landFromBlueprints(bps, size, size, seed + attempt)
+    const bps = planIslands(rng, size, undefined, dynamic)
+    const land = landFromBlueprints(bps, size, size, seed + attempt, dynamic)
     let total = 0
     for (let i = 0; i < land.length; i++) total += land[i]
     const w0: World = { seed, w: size, h: size, land, trees: [], decor: [], island: { x: 0, y: 0, w: size, h: size } }

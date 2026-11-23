@@ -49,7 +49,7 @@ export function FilmView({ film, title, endT, onClose, onSwitch }: { film: Film;
     const cv = canvas.current!, assets = sharedAssets.current, S = st.current
     if (!assets) { setBusy('The art is not loaded yet'); return }
     const p = film.params
-    const g = Game.fromSeed(p.seed, p.kingdoms ?? 0, p.playerTowns, { archipelago: true, playerColor: p.color, startLumber: p.lumber })
+    const g = Game.fromSeed(p.seed, p.kingdoms ?? 0, p.playerTowns, { archipelago: true, playerColor: p.color, startLumber: p.lumber, dynamic: p.dynamic })
     g.rec.disabled = true; S.game = g
     const view = { w: 800, h: 600, dpr: 1 }
     const resize = () => {

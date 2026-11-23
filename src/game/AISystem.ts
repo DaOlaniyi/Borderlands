@@ -7,7 +7,7 @@ import { manageGarrisons, runPost } from './Garrison'
 import { isEvacBoat } from './Evac'
 import { coastSpotFor } from './ColonyAI'
 import { manageNavalForces, navalPicture, navalThreats, stagingPoint } from './NavyAI'
-import { cargoCount, mooringNear, orderSail, unload, isWaterCell } from './BoatSystem'
+import { cargoCount, mooringNear, orderSail, unload, isWaterCell, isLandingShip } from './BoatSystem'
 import type { Game } from './Game'
 import { landmassAt } from './WorldInfo'
 import type { Boat, Town, Unit } from './types'
@@ -91,7 +91,7 @@ function defendShores(g: Game, k: number, mine: Unit[]) {
     if (b.hp <= 0 || b.faction === k || g.diplomacy.allied(k, b.faction) || (!b.docked && !b.docking)) continue
     const land = b.docked && b.dockCell >= 0 ? b.dockCell : (mooringNear(g, b.x, b.y, 2)?.land ?? -1)
     if (land < 0 || g.controller[land] !== k + 1) continue // only ships on OUR ground
-    if (g.diplomacy.get(k, b.faction) === 'neutral') g.diplomacy.violation(b.faction, k, g.time, g.label, 'moored a ship on')
+    if (g.diplomacy.get(k, b.faction) === 'neutral') { if (isLandingShip(b)) g.diplomacy.violation(b.faction, k, g.time, g.label, 'moored a ship on'); else continue } // (an empty warship or cargo boat at a peaceful dock is left alone)
     if (!g.hostile(k, b.faction)) continue
     const gx = (land % w + 0.5) * TILE, gy = (Math.floor(land / w) + 0.5) * TILE, L = landmassAt(g.world, gx, gy)
     const pool = mine.filter(u => u.state !== 'dead' && !g.resting.has(u.id) && u.aiRole !== 'bridge' && u.aiRole !== 'dash' && u.aiRole !== 'laststand' && u.boardBoat < 0 && landmassAt(g.world, u.x, u.y) === L && tiles(u, { x: gx, y: gy }) < 22)
@@ -778,17 +778,33 @@ export function placeShip(g: Game, k: number, kind: BoatKind, near?: { x: number
  * towers are done. A Zumwalt costs more than a 'med' stockpile allows, so a nation saving for one switches its pawns to unlimited
  * harvesting until it can pay (and goes back afterwards).
  */
-/** Zumwalts afloat of the strongest nation `k` is at war with: the fleet it has to match. */
-export function enemyFleet(g: Game, k: number): number {
-  let top = 0
-  for (const o of g.kingdoms) {
-    if (o.id === k || !o.alive) continue
-    const r = g.diplomacy.get(k, o.id)
-    if (r !== 'war' && r !== 'total') continue
-    top = Math.max(top, g.boats.filter(b => b.faction === o.id && b.kind === 'zumwalt' && b.hp > 0).length)
+/** Zumwalts a kingdom has afloat or on the stocks. */
+const zumCount = (g: Game, id: number) => g.boats.filter(b => b.faction === id && b.kind === 'zumwalt' && b.hp > 0).length + g.towers.filter(t => t.faction === id && t.kind === 'zumwalt' && !t.built).length
+
+/**
+ * The arms race, seen from kingdom `k`: everybody its alliance is at war with (the bloc's enemies, counted once each) fields `enemies` Zumwalts in all;
+ * the bloc (k, its allies, the player included) has `bloc`; and to out-number the enemy by one the bloc is `deficit` short. The shortfall is split among
+ * the AI members of the bloc in proportion to their towns, so allies share the work instead of each building the whole thing (`share` is k's part).
+ */
+export function warFleets(g: Game, k: number): { enemies: number; bloc: number; deficit: number; share: number } {
+  const members = g.diplomacy.bloc(k).filter(m => g.kingdoms[m]?.alive)
+  const inBloc = new Set(members)
+  const foes = new Set<number>()
+  for (const m of members) for (const o of g.kingdoms) {
+    if (!o.alive || inBloc.has(o.id)) continue
+    const r = g.diplomacy.get(m, o.id)
+    if (r === 'war' || r === 'total') foes.add(o.id)
   }
-  return top
+  let enemies = 0, bloc = 0
+  for (const f of foes) enemies += zumCount(g, f)
+  for (const m of members) bloc += zumCount(g, m)
+  const deficit = enemies > 0 ? Math.max(0, enemies + 1 - bloc) : 0
+  const ai = members.filter(m => !g.kingdoms[m].isPlayer), total = ai.reduce((n, m) => n + Math.max(1, g.ownedTowns(m)), 0)
+  const share = deficit > 0 && ai.includes(k) ? Math.ceil(deficit * Math.max(1, g.ownedTowns(k)) / Math.max(1, total)) : 0
+  return { enemies, bloc, deficit, share }
 }
+/** The Zumwalts all of `k`'s enemies field together (see warFleets). */
+export const enemyFleet = (g: Game, k: number) => warFleets(g, k).enemies
 
 function manageFleet(g: Game, k: number, towns: number, atWar = false, underNavalAttack = false, diploWar = false) {
   const kingdom = g.kingdoms[k], saved = g.aiMemo.harvestSaved
@@ -804,16 +820,16 @@ function manageFleet(g: Game, k: number, towns: number, atWar = false, underNava
   if (underNavalAttack && towns >= 1) want = Math.max(want, 2) // attacked from the sea: answer with warships of our own
   const have = g.boats.filter(b => b.faction === k && b.kind === 'zumwalt').length + g.towers.filter(t => t.faction === k && t.kind === 'zumwalt').length
   const need = ZUMWALT.cost + AI.zumReserve
-  // arms race: at war, a nation matches the strongest enemy fleet (at least as many Zumwalts) and may go one better when it can pay at once (never more),
-  // and a fleet that was sunk is rebuilt (the peak it had this war) before anything else is bought
-  const peak = g.aiMemo.fleetPeak, foeFleet = diploWar ? enemyFleet(g, k) : 0
+  // arms race: at war, the nation's alliance aims to field one more Zumwalt than ALL its enemies together (a nation at war with three others that have 8 between them
+  // aims for 9), the shortfall shared between the allies by size; and a fleet that was sunk is rebuilt (the peak it had this war) before anything else is bought
+  const peak = g.aiMemo.fleetPeak, race = diploWar ? warFleets(g, k) : { enemies: 0, bloc: 0, deficit: 0, share: 0 }, foeFleet = race.enemies
   if (diploWar) peak.set(k, Math.max(peak.get(k) ?? 0, have)); else peak.delete(k)
   let behind = 0 // Zumwalts short of what the war demands: while above 0 lumber goes to the fleet first
   if (diploWar && towns >= 2) {
     if (foeFleet > 0) {
-      want = Math.max(foeFleet, Math.min(want, foeFleet + 1))
-      if (want > foeFleet && (have < foeFleet || kingdom.lumber < need)) want = foeFleet // the extra one only when we have matched them and can pay for it now
-      behind = Math.max(0, foeFleet - have)
+      want = Math.max(want, have + race.share)
+      behind = race.share
+      aiNote(g, k, 'arms', race.deficit > 0 ? 'wait' : 'ok', `Arms race: enemies field ${foeFleet} Zumwalts; our alliance has ${race.bloc} (aim ${foeFleet + 1}${race.deficit > 0 ? `, ${race.deficit} short, ours to build: ${race.share}` : ', matched'})`)
     } else if (lostZums) {
       const rebuild = Math.min(3, peak.get(k) ?? 0)
       want = Math.max(want, rebuild)

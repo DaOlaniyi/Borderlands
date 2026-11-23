@@ -525,16 +525,14 @@ export class Renderer {
     const lum = (parseInt(hex.slice(1, 3), 16) * 0.3 + parseInt(hex.slice(3, 5), 16) * 0.59 + parseInt(hex.slice(5, 7), 16) * 0.11) / 255
     drawEmblem(ctx, k.emblem, x, y - sz / 2, sz, hex, lum > 0.62 ? FACTION_DARK[k.color] : '#ffffff')
   }
-  /** A ship's rank insignia, on a small dark plate to the right of its kingdom badge (it scales with the camera zoom like the badge does, and is a bit bigger so the detail reads). */
+  /** A ship's rank insignia: the bare cut-out (no plate) to the right of its kingdom badge, 80 % of the badge's height, scaling with the camera zoom like the badge. */
   private drawRank(ctx: CanvasRenderingContext2D, rank: number, x: number, y: number, size: number) {
     const img = this.assets.ranks[rank]
     if (!img) return
-    const sz = Math.min(110, Math.max(size, 20 / this.zoomNow)), H = sz * 1.55, W = sz * 2.0, pad = sz * 0.12
-    const k = Math.min((H - pad * 2) / img.height, (W - pad * 2) / img.width), w = img.width * k, h = img.height * k
-    const plateW = Math.max(w + pad * 2, H * 0.8), cx = x + sz / 2 + sz * 0.2 + plateW / 2, cy = y - sz / 2
-    ctx.save()
-    ctx.fillStyle = 'rgba(12,16,22,.78)'; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = Math.max(1, sz * 0.06)
-    ctx.beginPath(); ctx.roundRect(cx - plateW / 2, cy - H / 2, plateW, H, sz * 0.22); ctx.fill(); ctx.stroke()
+    const sz = Math.min(110, Math.max(size, 20 / this.zoomNow)), boxH = sz * 0.8, boxW = sz * 1.15
+    const k = Math.min(boxH / img.height, boxW / img.width), w = img.width * k, h = img.height * k
+    const cx = x + sz / 2 + sz * 0.14 + w / 2, cy = y - sz / 2
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = Math.max(1, sz * 0.1)
     ctx.drawImage(img, cx - w / 2, cy - h / 2, w, h)
     ctx.restore()
   }

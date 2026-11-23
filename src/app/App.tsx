@@ -16,7 +16,7 @@ export default function App() {
     // kingdom count is normally derived from the seed (10–15)
     const q = new URLSearchParams(location.search), seed = q.get('seed')
     const towns = Number(q.get('towns')), lumber = Number(q.get('lumber')), kingdoms = Number(q.get('kingdoms')), color = FACTION_NAMES.findIndex(n => n.toLowerCase() === (q.get('color') ?? '').toLowerCase())
-    return seed ? { seed, color: Math.max(0, color), kingdoms: kingdoms >= 2 ? Math.min(MAX_KINGDOMS, kingdoms) : undefined, lumber: lumber > 0 ? lumber : undefined, playerTowns: towns >= 1 ? Math.min(START.maxPlayerTowns, towns) : undefined } : null
+    return seed ? { seed, color: Math.max(0, color), kingdoms: kingdoms >= 2 ? Math.min(MAX_KINGDOMS, kingdoms) : undefined, lumber: lumber > 0 ? lumber : undefined, playerTowns: towns >= 1 ? Math.min(START.maxPlayerTowns, towns) : undefined, dynamic: q.get('dynamic') === '1' } : null
   })
   useEffect(() => { if (params) recordSeed(params) }, []) // eslint-disable-line react-hooks/exhaustive-deps -- a match started from the URL is remembered too
   useEffect(() => {

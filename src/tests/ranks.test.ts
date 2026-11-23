@@ -64,11 +64,12 @@ describe('ship ranks', () => {
     expect((a.xp ?? 0) - before).toBeGreaterThan(hull * RANK_TUNE.kill * 0.99) // 1 hp of damage plus the kill bonus
   })
 
-  it('a Zumwalt fight is worth about a promotion to Corporal', () => {
+  it('a Zumwalt fight earns a first promotion, but ranks come slowly', () => {
     const g = arena()
     const a = spawnBoat(g, 0, 'zumwalt', px(55), px(20)), v = spawnBoat(g, 1, 'zumwalt', px(60), px(20))
     for (let i = 0; i < 6; i++) damageBoat(g, v, 96, 0, true, a.id) // half of the other ship's hull
-    expect(a.rank ?? 0).toBeGreaterThanOrEqual(3)
+    expect(a.rank ?? 0).toBeGreaterThanOrEqual(1)
+    expect(a.rank ?? 0).toBeLessThan(3)
   })
 
   it('a ranked ship hits harder and sails faster', () => {

@@ -26,8 +26,8 @@ export const RANKS = [
 ] as const
 export const RANK_MAX = RANKS.length - 1
 
-/** Total XP at which each rank is reached (index = rank). A Zumwalt-vs-Zumwalt fight is worth roughly 1000+ XP, which is a promotion to Corporal or Sergeant. */
-export const RANK_XP = [0, 100, 250, 500, 900, 1500, 2400, 3700, 5500, 8000, 11500, 16000]
+/** Total XP at which each rank is reached (index = rank). Five times the first tuning, so promotions are slow: a Zumwalt-vs-Zumwalt fight is worth roughly 1000+ XP, a Private. */
+export const RANK_XP = [0, 500, 1250, 2500, 4500, 7500, 12000, 18500, 27500, 40000, 57500, 80000]
 
 export const RANK_TUNE = {
   topBonus: 0.5, // at the top rank: +50 % health, damage and speed

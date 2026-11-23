@@ -47,6 +47,7 @@ export type HudActions = {
   setSpeed: (n: number) => void
   setHarvest: (m: HarvestMode) => void
   exit: () => void
+  spectate: () => void
   openSaves: () => void
   openRamp: () => void
   openDebug: () => void
@@ -142,7 +143,7 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
   const sel = hud.units
   const lead = sel[0]
   return (
-    <div className="hud">
+    <div className={'hud' + (hud.spectating ? ' spectating' : '')}>
       <LetterFeed letters={hud.letters} />
       <div className="topleft">
         <div className="panel hud-top">
@@ -377,9 +378,10 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
         </div>
       )}
       <div className="hint help">Drag a unit to draw a route · shift-click or C-brush to select several · S stops movement · drag empty ground to pan · scroll to zoom · B toggles block</div>
-      {hud.status === 'defeat' && (
-        <div className="menu over"><div className="panel menu-card"><h1>Defeated</h1><p className="sub">Your last town and your last unit are gone.</p><button className="tsbtn big" onClick={actions.exit}>New match</button></div></div>
+      {hud.status === 'defeat' && !hud.spectating && (
+        <div className="menu over"><div className="panel menu-card"><h1>Defeated</h1><p className="sub">Your last town and your last unit are gone. You can stay and watch the rest of the match: the whole map is revealed and the other nations play on.</p><button className="tsbtn big" onClick={actions.spectate}>Spectate the match</button><button className="mini menu-load" onClick={actions.exit}>New match</button></div></div>
       )}
+      {hud.spectating && <div className="panel spectate-banner"><b>Spectating</b><span>your kingdom has fallen · the whole map is visible</span><button className="mini" onClick={actions.exit}>Leave match</button></div>}
       {!hud.towns && hud.status === 'playing' && <div className="toast banner">You have no towns — recapture one to restore supply, power and territory</div>}
       {perf && <pre className="perf">{perf}</pre>}
     </div>

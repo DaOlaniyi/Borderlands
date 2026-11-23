@@ -46,6 +46,7 @@ export type HudUnit = { id: number; name: string; type: UnitType; hp: number; ma
 export type HudSnapshot = {
   seed: number
   status: 'playing' | 'defeat'
+  spectating: boolean
   lumber: number
   gold: number // stockpile of the region the player last clicked (home, or a settlement)
   meat: number
@@ -194,6 +195,8 @@ export class Game {
   showRange = false
   aiEnabled = true
   status: 'playing' | 'defeat' = 'playing'
+  /** A defeated player may keep watching: the whole map is revealed and the AI nations play on. */
+  spectating = false
   rng: Rng
   /** Separate stream for the economy (sheep, gold) so it never shifts the combat / AI dice. */
   rngE: Rng
@@ -309,10 +312,18 @@ export class Game {
   }
 
   /** `archipelago` builds the real 200×200 world of islands (kingdomCount defaults to 10–15 from the seed); otherwise one island (tests, experiments). */
-  static fromSeed(seed: string | number, kingdomCount: number, playerTowns?: number, opts: { archipelago?: boolean; playerColor?: number; startLumber?: number } = {}) {
-    const { world, spawns } = opts.archipelago ? generateArchipelago(seed, kingdomCount || undefined, playerTowns) : generateWorld(seed, kingdomCount, playerTowns)
+  static fromSeed(seed: string | number, kingdomCount: number, playerTowns?: number, opts: { archipelago?: boolean; playerColor?: number; startLumber?: number; dynamic?: boolean } = {}) {
+    const { world, spawns } = opts.archipelago ? generateArchipelago(seed, kingdomCount || undefined, playerTowns, !!opts.dynamic) : generateWorld(seed, kingdomCount, playerTowns)
     const count = Math.max(...spawns.map(s => s.kingdom)) + 1
     return new Game({ world, spawns, colors: assignColors(count, opts.playerColor ?? 0), startLumber: opts.startLumber })
+  }
+
+  /** After defeat: stay and watch. The whole map is shown (no fog), nothing else about the match changes. */
+  startSpectating() {
+    if (this.status !== 'defeat') return
+    this.spectating = true
+    this.fogLands.clear(); this.fog.fill(0)
+    this.selection = null; this.placing = false
   }
 
   // ---------- fog of war ----------
@@ -1482,7 +1493,7 @@ export class Game {
       if (p) { const t = p.tree >= 0 ? this.world.trees[p.tree] : null; pawn = { state: p.state, carry: p.carry, progress: t ? Math.min(1, t.progress / (t.kind <= 1 ? 150 : 60)) : 0 } }
     }
     return {
-      seed: this.world.seed, status: this.status, lumber: Math.floor(viewStock(this).stock.lumber), gold: Math.floor(viewStock(this).stock.gold), meat: Math.floor(viewStock(this).stock.meat), region: viewStock(this).settlement ? 'Settlement' : viewStock(this).land === this.kingdoms[0].homeLand ? 'Home' : 'Island', power: Math.floor(me.power), towns: this.ownedTowns(0), pop: this.pop(0), cap: this.cap(0),
+      seed: this.world.seed, status: this.status, spectating: !!this.spectating, lumber: Math.floor(viewStock(this).stock.lumber), gold: Math.floor(viewStock(this).stock.gold), meat: Math.floor(viewStock(this).stock.meat), region: viewStock(this).settlement ? 'Settlement' : viewStock(this).land === this.kingdoms[0].homeLand ? 'Home' : 'Island', power: Math.floor(me.power), towns: this.ownedTowns(0), pop: this.pop(0), cap: this.cap(0),
       kingdomName: me.name, title: tier.title, level: tier.level, produce: { ...me.produce }, time: this.time, speed: this.speed, placing: this.placing, navy: (({ points, used, gun, zum, zumCap, yards }) => ({ points, used, gun, zum, zumCap, yards }))(navalBudget(this, 0)),
       kingdoms: this.kingdoms.map(k => { const t = this.title(k.id); return { id: k.id, name: k.name, title: t.title, level: t.level, color: k.color, emblem: k.emblem, towns: this.ownedTowns(k.id), tiles: this.tileCounts[k.id] ?? 0, lumber: Math.floor(k.lumber), power: Math.floor(k.power), agitation: k.isPlayer ? null : Math.round(this.agit[k.id]), temperament: k.isPlayer ? null : k.temperament, ready: !!this.ready[k.id] && !k.isPlayer, allies: this.diplomacy.alliesOf(k.id), focused: this.focusKingdom === k.id, allyBlocked: k.isPlayer ? null : this.allyBlockedReason(k.id), merged: this.mergeColors.has(k.id), units: this.units.filter(u => u.faction === k.id && u.state !== 'dead').reduce((n, u) => n + u.count, 0), alive: k.alive, isPlayer: k.isPlayer, relation: this.diplomacy.get(0, k.id) } }),
       units: sel.map(u => ({ id: u.id, name: u.name, type: u.type, hp: Math.round(u.hp), maxHp: u.maxHp, count: u.count, members: u.memberNames, mode: u.mode, state: u.state, cutOff: u.cutOff, overcap: u.overcap, inTower: u.inTower >= 0, healing: this.healingAtTown(u) })),

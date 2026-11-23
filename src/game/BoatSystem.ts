@@ -15,6 +15,8 @@ type Target = { kind: Shell['kind']; id: number; x: number; y: number }
 export const boatStats = (k: BoatKind) => (k === 'boat' ? BOAT : k === 'zumwalt' ? ZUMWALT : k === 'cargo' ? CARGO : k === 'barge' ? BARGE : GUNSHIP)
 export const emptyStock = (): Stock => ({ lumber: 0, gold: 0, meat: 0 })
 export const stockTotal = (s: Stock) => s.lumber + s.gold + s.meat
+/** Mooring on a peaceful nation's shore violates its border, unless the ship is an empty warship (Zumwalt or gunship, no troops aboard): tying up at a dock is no landing. Cargo boats, infantry boats and barges still count. */
+export const isLandingShip = (b: Pick<Boat, 'kind' | 'cargo'>) => !((b.kind === 'zumwalt' || b.kind === 'gunship') && b.cargo.length === 0)
 export const isArmed = (b: Boat) => b.kind === 'zumwalt' || b.kind === 'gunship'
 /** Radius (px) used to hit-test and target a ship. */
 export const boatRadius = (b: Boat) => (b.kind === 'zumwalt' ? 80 : b.kind === 'barge' ? 54 : 46)
@@ -830,7 +832,7 @@ function tryMoor(g: Game, b: Boat, dt: number) {
   b.blockedT = 0
   b.dockT += dt
   const owner = g.baseOwnerAt(gx, gy) // landing on a peaceful nation's shore is a violation of its border
-  if (owner >= 0 && b.dockT >= 1.5 && !g.diplomacy.allied(b.faction, owner) && g.diplomacy.get(b.faction, owner) === 'neutral') g.diplomacy.violation(b.faction, owner, g.time, g.label, 'moored a ship on')
+  if (owner >= 0 && b.dockT >= 1.5 && isLandingShip(b) && !g.diplomacy.allied(b.faction, owner) && g.diplomacy.get(b.faction, owner) === 'neutral') g.diplomacy.violation(b.faction, owner, g.time, g.label, 'moored a ship on')
   if (b.dockT >= dockTimeOf(b)) { b.x = m.x; b.y = m.y; moor(g, b, m.land, m.dx, m.dy) }
 }
 

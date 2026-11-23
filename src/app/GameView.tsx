@@ -67,12 +67,12 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
 
   useEffect(() => {
     const canvas = canvasRef.current!
-    const game = params.save ? restoreGame(params, params.save.json, params.save.recording) : Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, startLumber: params.lumber })
+    const game = params.save ? restoreGame(params, params.save.json, params.save.recording) : Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, dynamic: params.dynamic, startLumber: params.lumber })
     gameRef.current = game; setGame(game)
     // the literal replay: keyframes every 30 s and a log of the player's commands (a loaded match carries on the film it was saved with)
     const savedFilm = params.save?.film ? (() => { try { return unpackFilm(params.save!.film!) } catch { return null } })() : null
-    game.rec.startFilm({ seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber }, serializeGame, savedFilm)
-    { const rp = { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber } // the position-recording film: a frame every second
+    game.rec.startFilm({ seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic }, serializeGame, savedFilm)
+    { const rp = { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic } // the position-recording film: a frame every second
       if (params.save?.reel) void unpackReel(params.save.reel).then(r => game.rec.startReel(game, rp, r), () => game.rec.startReel(game, rp)); else game.rec.startReel(game, rp) }
     const cmd = recordInputs(game) // the player's interface goes through this view of the game, so every command is logged
     if (import.meta.env.DEV && !params.save) { const ff = Number(new URLSearchParams(location.search).get('ff')); for (let i = 0; i < ff * 25; i++) game.step(1 / 25) } // dev aid: ?ff=600 fast-forwards ten minutes
@@ -159,6 +159,7 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
       setSpeed: n => { cmd.speed = n },
       setHarvest: m => cmd.setHarvest(0, m),
       exit: onExit,
+      spectate: () => game.startSpectating(),
       openSaves: () => setDialog('saves'),
       openRamp: () => cmd.toggleRamp(),
       openDebug: () => setDialog('debug'),
@@ -286,7 +287,7 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
 async function saveGame(game: Game, cam: Camera, params: NewGameParams, name: string, id: string, auto: boolean) {
   await putSave({
     id, name, auto, savedAt: new Date().toISOString(), cam: { x: cam.x, y: cam.y, zoom: cam.zoom },
-    params: { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber },
+    params: { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic },
     gameTime: game.time, kingdomName: game.kingdoms[0].name, towns: game.ownedTowns(0), kingdoms: game.kingdoms.length,
   }, serializeGame(game), serializeRecording(game), game.rec.film ? await packFilm({ ...game.rec.film, endT: game.time }) : undefined, game.rec.reel ? await packReel(game.rec.reel) : undefined)
 }

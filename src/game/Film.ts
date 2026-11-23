@@ -10,7 +10,7 @@ import type { Game } from './Game'
 export const KEY_EVERY = 30 // game seconds between keyframes
 export type FilmInput = { tick: number; m: string; a: unknown[] }
 export type FilmKey = { t: number; tick: number; data: string | Uint8Array }
-export type FilmParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number }
+export type FilmParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number; dynamic?: boolean }
 export type Film = { v: 1; params: FilmParams; keys: FilmKey[]; inputs: FilmInput[]; endT?: number }
 
 const SKIP_CALLS = /^(pick|selected|inspected|get|is|can|has|hud|advance|step|title|label|pop|cap|ownedTowns|ownedSettlements|structureError|outpostError|priceOf|nearestTown|pawnTargetAt|relationArrows|warnings|conflictTabs|boatHud|townHud|structureHud|say|unitById|boatById|towerById|pawnById|cellAt|refreshHash|recompute|markDirty|allocId|nextSeq|spawn|constructor|toJSON|updateFog|ownedStock|stockOf)/

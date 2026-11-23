@@ -8,7 +8,7 @@ import { SavesDialog } from './SavesDialog'
 import { fmtWhen, loadHistory, toParams, type SeedEntry } from './seedHistory'
 
 /** playerTowns undefined = "Auto": the generator picks a balanced size. `kingdoms` undefined = derived from the seed (10–15). */
-export type NewGameParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number; save?: { json: string; cam?: Cam; recording?: string; film?: Uint8Array; reel?: Uint8Array } }
+export type NewGameParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number; dynamic?: boolean; save?: { json: string; cam?: Cam; recording?: string; film?: Uint8Array; reel?: Uint8Array } }
 const LUMBER_CHOICES = [30, 100, 300, 1000, 5000]
 
 const randomSeed = () => Math.random().toString(36).slice(2, 8).toUpperCase()
@@ -19,6 +19,7 @@ export function NewGameScreen({ onStart, onLoad, ready }: { onStart: (p: NewGame
   const [seed, setSeed] = useState(() => randomSeed())
   const [color, setColor] = useState(0)
   const [lumber, setLumber] = useState(30)
+  const [dynamic, setDynamic] = useState(true)
   const [history] = useState<SeedEntry[]>(() => loadHistory())
   const rivals = TOTAL_KINGDOMS - 1
   const recommended = MENU_ORDER.filter(i => PALETTE[i].recommended), others = MENU_ORDER.filter(i => !PALETTE[i].recommended)
@@ -51,12 +52,18 @@ export function NewGameScreen({ onStart, onLoad, ready }: { onStart: (p: NewGame
         <div className="row"><span className="label">Lumber</span>
           <div className="seg">{LUMBER_CHOICES.map(n => <button key={n} className={n === lumber ? 'on' : ''} title={n === 30 ? 'The normal start' : 'Start with extra lumber (for testing buildings)'} onClick={() => setLumber(n)}>{n}</button>)}</div>
         </div>
+        <div className="row"><span className="label">Terrain</span>
+          <div className="seg">
+            <button className={dynamic ? 'on' : ''} title="Calderas with lagoons, crescents round bays, branching continents, dumbbells joined by an isthmus, fjords and skerries" onClick={() => setDynamic(true)}>Dynamic islands</button>
+            <button className={!dynamic ? 'on' : ''} title="The original blob islands" onClick={() => setDynamic(false)}>Classic</button>
+          </div>
+        </div>
         <small className="hint2">You can start anywhere: on a great land mass, or a lone island. Conquer it, then build boats.</small>
         <div className="row"><span className="label">Seed</span>
           <input value={seed} onChange={e => setSeed(e.target.value)} spellCheck={false} />
           <button className="mini" title="New random seed" onClick={() => setSeed(randomSeed())}>⟳</button>
         </div>
-        <button className="tsbtn big" disabled={!ready} onClick={() => onStart({ seed: seed.trim() || randomSeed(), color, playerTowns: towns, lumber })}>{ready ? 'Start match' : 'Loading art…'}</button>
+        <button className="tsbtn big" disabled={!ready} onClick={() => onStart({ seed: seed.trim() || randomSeed(), color, playerTowns: towns, lumber, dynamic })}>{ready ? 'Start match' : 'Loading art…'}</button>
         <button className="mini menu-load" disabled={!ready} title="Continue a saved match" onClick={() => setLoading(true)}>Load saved game…</button>
         {history.length > 0 && (
           <div className="seedhist" aria-label="Seeds you have played">
@@ -66,7 +73,7 @@ export function NewGameScreen({ onStart, onLoad, ready }: { onStart: (p: NewGame
                 <i style={{ background: FACTION_COLORS[h.color] }} title={FACTION_NAMES[h.color]} />
                 <b>{h.seed}</b>
                 <span>{fmtWhen(h.at)}</span>
-                <button className="mini" title="Load this seed and its settings into the form" onClick={() => { setSeed(h.seed); setColor(h.color); setTowns(h.towns); if (h.lumber) setLumber(h.lumber) }}>Use</button>
+                <button className="mini" title="Load this seed and its settings into the form" onClick={() => { setSeed(h.seed); setColor(h.color); setTowns(h.towns); setDynamic(!!h.dynamic); if (h.lumber) setLumber(h.lumber) }}>Use</button>
                 <button className="mini" disabled={!ready} title="Start this exact map again" onClick={() => onStart(toParams(h))}>Replay</button>
               </div>
             ))}

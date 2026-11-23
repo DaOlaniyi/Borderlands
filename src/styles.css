@@ -316,3 +316,7 @@ b.mk-war, b.mk-town, b.mk-elim { padding: 0 4px; border-radius: 2px; display: in
 .rankrow > div { display: flex; flex-direction: column; gap: 2px; min-width: 190px; }
 .xpbar { height: 6px; background: #3a2a1c; border-radius: 3px; overflow: hidden; } .xpbar i { display: block; height: 100%; background: #e0b84a; }
 .rankgain { color: #6b3f00; font-weight: 700; }
+
+.spectating .hud-top, .spectating .produce, .spectating .shop, .spectating .hud-sel, .spectating .help, .spectating .toast.banner { display: none; }
+.spectate-banner { position: absolute; top: 12px; left: 12px; display: flex; gap: 12px; align-items: center; padding: 8px 14px; z-index: 5; }
+.spectate-banner span { opacity: .75; font-size: 13px; }
