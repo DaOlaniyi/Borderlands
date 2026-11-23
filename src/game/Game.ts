@@ -1,4 +1,4 @@
-import { BARGE, SHIP_NAME, REGROW, YARD, OUTPOST, FOG, shipLength, CARGO, GUNSHIP, GOLD, MEAT, SETTLE, TOWN_LEVEL, type Stock, TEMPER, TEMPER_MIX, type Temperament, AGIT, AI, BOAT, BOAT_FLAG, CARE, DOCK, LOT, MAX_FRAME_DT, RESCUE, ZUMWALT, ZUM_FOCUS, type BoatKind, type ZumFocus, POP, REL, SHOT_REACT, SIM_DT, START, TERRITORY, TILE, TOWER, TOWN, UNIT, UNIT_BODY, UNIT_TYPES, type HarvestMode, type UnitType } from './config'
+import { BARGE, BATTLESHIP, SHIP_NAME, REGROW, YARD, OUTPOST, FOG, shipLength, CARGO, GUNSHIP, GOLD, MEAT, SETTLE, TOWN_LEVEL, type Stock, TEMPER, TEMPER_MIX, type Temperament, AGIT, AI, BOAT, BOAT_FLAG, CARE, DOCK, LOT, MAX_FRAME_DT, RESCUE, ZUMWALT, ZUM_FOCUS, type BoatKind, type ZumFocus, POP, REL, SHOT_REACT, SIM_DT, START, TERRITORY, TILE, TOWER, TOWN, UNIT, UNIT_BODY, UNIT_TYPES, type HarvestMode, type UnitType } from './config'
 import { hash2 } from './rng'
 import { logEvent, newStats, noteKills, sampleStats, spend, type GameStats } from './Stats'
 import { agitationTick, formAlliance, playerAllianceRequest, townFell, updateAgitation } from './AgitationSystem'
@@ -69,7 +69,7 @@ export type HudSnapshot = {
   town: { id: number; label: string; mine: boolean; hostile: boolean; owner: string; hp: number; maxHp: number; produce: boolean; raze: boolean; kind: string; level: number; store: Stock | null; shared: boolean; meatCap: number; decay: number; upgrade: { label: string; error: string | null } | null; troops: number; cap: number } | null
   structure: { id: number; kind: string; built: boolean; progress: number; refund: number } | null
   placing: false | StructureKind
-  navy: { points: number; used: number; gun: number; zum: number; zumCap: number; yards: number }
+  navy: { points: number; used: number; gun: number; zum: number; zumCap: number; bs: number; bsCap: number; gunCap: number; yards: number }
   boat: { rank: ReturnType<typeof rankInfo> | null; id: number; kind: BoatKind; open: boolean; hp: number; maxHp: number; cargo: number; cap: number; docked: boolean; docking: number; blocked: boolean; focus: ZumFocus; count: number; zumwalts: number; names: string[]; load: Stock; want: Stock; unload: Stock; trade: { a: string; b: string; leg: string } | null; armed: boolean; striking: boolean; hasStrike: boolean; picking: false | 'a' | 'b'; pct: number; owner: string; mine: boolean } | null
   events: string[]
   spills: string[]
@@ -88,7 +88,7 @@ export type ConflictTab =
   | { kind: 'ai'; a: number; b: number; aName: string; bName: string; relation: 'conflict' | 'war' | 'total'; aLost: number; bLost: number }
 
 export type StructureKind = 'tower' | 'lot' | 'settlement' | 'outpost' | 'yard' | BoatKind
-export const isShipKind = (k: StructureKind): k is BoatKind => k === 'boat' || k === 'zumwalt' || k === 'cargo' || k === 'gunship' || k === 'barge'
+export const isShipKind = (k: StructureKind): k is BoatKind => k === 'boat' || k === 'zumwalt' || k === 'cargo' || k === 'gunship' || k === 'barge' || k === 'battleship'
 export type Projectile = { x0: number; y0: number; x1: number; y1: number; t: number; dur: number }
 /** Short-lived visual effects and sounds (renderer/audio read them; the sim never depends on them). */
 export type Fx = { kind: 'capture' | 'hit' | 'boom' | 'splash'; x: number; y: number; t: number }
@@ -312,10 +312,30 @@ export class Game {
   }
 
   /** `archipelago` builds the real 200×200 world of islands (kingdomCount defaults to 10–15 from the seed); otherwise one island (tests, experiments). */
-  static fromSeed(seed: string | number, kingdomCount: number, playerTowns?: number, opts: { archipelago?: boolean; playerColor?: number; startLumber?: number; dynamic?: boolean } = {}) {
-    const { world, spawns } = opts.archipelago ? generateArchipelago(seed, kingdomCount || undefined, playerTowns, !!opts.dynamic) : generateWorld(seed, kingdomCount, playerTowns)
+  static fromSeed(seed: string | number, kingdomCount: number, playerTowns?: number, opts: { archipelago?: boolean; playerColor?: number; startLumber?: number; dynamic?: boolean; playAs?: number } = {}) {
+    const gen = opts.archipelago ? generateArchipelago(seed, kingdomCount || undefined, playerTowns, !!opts.dynamic) : generateWorld(seed, kingdomCount, playerTowns)
+    const { world } = gen
+    let spawns = gen.spawns
     const count = Math.max(...spawns.map(s => s.kingdom)) + 1
-    return new Game({ world, spawns, colors: assignColors(count, opts.playerColor ?? 0), startLumber: opts.startLumber })
+    const colors = assignColors(count, opts.playerColor ?? 0)
+    const p = opts.playAs ?? 0
+    if (p > 0 && p < count) { // play as kingdom `p`: the world is the same, but the player takes that nation's exact starting position (and its colour, name and emblem), and the original player's start goes to the AI
+      spawns = spawns.map(s => ({ ...s, kingdom: s.kingdom === 0 ? p : s.kingdom === p ? 0 : s.kingdom }));
+      [colors[0], colors[p]] = [colors[p], colors[0]]
+    }
+    const game = new Game({ world, spawns, colors, startLumber: opts.startLumber })
+    if (p > 0 && p < count) { const a = game.kingdoms[0], b = game.kingdoms[p]; [a.name, b.name] = [b.name, a.name]; [a.emblem, b.emblem] = [b.emblem, a.emblem] }
+    return game
+  }
+  /** What a click on a nation's tag shows: its army (units by type), ships and towns. */
+  kingdomCard(k: number) {
+    const kg = this.kingdoms[k]
+    if (!kg) return null
+    const army: Record<UnitType, number> = { warrior: 0, archer: 0, lancer: 0, knight: 0 }
+    for (const u of this.units) if (u.faction === k && u.state !== 'dead' && (u.inTower < 0 || u.inTower >= BOAT_FLAG) && !u.free) army[u.type] += u.count
+    const ships: Partial<Record<BoatKind, number>> = {}
+    for (const b of this.boats) if (b.faction === k && b.hp > 0) ships[b.kind] = (ships[b.kind] ?? 0) + 1
+    return { id: k, name: kg.name, title: this.title(k).title, color: kg.color, emblem: kg.emblem, alive: kg.alive, isPlayer: kg.isPlayer, towns: this.ownedTowns(k), settlements: this.ownedSettlements(k), units: this.pop(k), cap: this.cap(k), army, ships }
   }
 
   /** After defeat: stay and watch. The whole map is shown (no fog), nothing else about the match changes. */
@@ -615,6 +635,8 @@ export class Game {
 
     if (this.tickCount % FOG.updateEvery === 0) this.updateFog()
     if (this.tickCount % 25 === 0) this.regrowTrees()
+    this.updateStagedBuilds()
+    if (this.tickCount % 25 === 0) this.pruneBurns()
     this.economy(dt)
     updateEconomy(this, dt)
     updateTrade(this, dt)
@@ -665,6 +687,33 @@ export class Game {
   }
   /** Re-index after movement so collision/contact queries see current positions. */
   refreshHash() { this.syncHash() }
+
+  // ---------- bombardment fires (cosmetic only: nothing in the simulation reads these) ----------
+  /** Heat per 5x5-tile region of land, from shells landing in it; it fades with time. */
+  burnHeat = new Map<number, { heat: number; at: number }>()
+  /** Flames standing where shells have been landing (see noteBombardment). */
+  flames: { x: number; y: number; born: number; life: number; size: number; seed: number }[] = []
+  /**
+   * A big-gun shell has landed on land at (x, y). One stray shell does nothing; but a region that keeps being hit heats up, and from then on every shell
+   * sets the grass alight where it lands, with more flames (and bigger, longer-lived ones) the heavier the bombardment.
+   */
+  noteBombardment(x: number, y: number, power = 1) {
+    const key = Math.floor(x / (5 * TILE)) * 4096 + Math.floor(y / (5 * TILE))
+    const e = this.burnHeat.get(key) ?? { heat: 0, at: this.time }
+    e.heat = Math.max(0, e.heat - (this.time - e.at) * 0.1) + power; e.at = this.time; this.burnHeat.set(key, e)
+    if (e.heat < 2) return // (a shell or two does not light the grass)
+    const j1 = hash2(Math.floor(x), Math.floor(y), this.tickCount), j2 = hash2(Math.floor(y), Math.floor(x), this.tickCount + 7)
+    const inRegion = this.flames.filter(f => Math.floor(f.x / (5 * TILE)) * 4096 + Math.floor(f.y / (5 * TILE)) === key)
+    const cap = Math.min(16, 2 + Math.floor(e.heat * 1.6)) // flames alive at once in this region
+    if (inRegion.length >= cap) { const oldest = inRegion.reduce((a, b) => (a.born < b.born ? a : b)); this.flames.splice(this.flames.indexOf(oldest), 1) }
+    this.flames.push({ x: x + (j1 - 0.5) * 64, y: y + (j2 - 0.5) * 44, born: this.time, life: 8 + Math.min(e.heat, 12) * 2.4, size: 0.7 + Math.min(e.heat, 10) * 0.07, seed: Math.floor(j1 * 1e6) })
+    if (this.flames.length > 180) this.flames.shift()
+  }
+  /** Once a second: flames burn out, cold regions are forgotten. */
+  private pruneBurns() {
+    if (this.flames.length) this.flames = this.flames.filter(f => this.time - f.born < f.life)
+    for (const [k, e] of this.burnHeat) if (e.heat - (this.time - e.at) * 0.1 <= 0) this.burnHeat.delete(k)
+  }
 
   // ---------- forests ----------
   /** A tree has just been felled: it will grow back after REGROW.min..min+spread seconds (the delay is a hash of the tree and the moment, so no random stream is touched). */
@@ -949,7 +998,7 @@ export class Game {
     if (kind === 'outpost') return this.outpostError(faction, x, y)
     if (kind === 'yard') return yardError(this, faction, x, y)
     if (isShipKind(kind)) {
-      const label = kind === 'boat' ? 'Boats' : kind === 'zumwalt' ? 'Zumwalts' : kind === 'cargo' ? 'Cargo boats' : kind === 'barge' ? 'Barges' : 'Gunships', cost = this.priceOf(kind)
+      const label = kind === 'boat' ? 'Boats' : kind === 'zumwalt' ? 'Zumwalts' : kind === 'battleship' ? 'Battleships' : kind === 'cargo' ? 'Cargo boats' : kind === 'barge' ? 'Barges' : 'Gunships', cost = this.priceOf(kind)
       const cx = Math.floor(x / TILE), cy = Math.floor(y / TILE)
       if (cx < 0 || cy < 0 || cx >= this.world.w || cy >= this.world.h || this.world.land[cy * this.world.w + cx]) return `${label} must be built in the water`
       const shore = this.shoreFor(faction, x, y)
@@ -958,10 +1007,11 @@ export class Game {
       const reg = regionTownAt(this, faction, shore.x, shore.y)
       if (reg && reg.level < SETTLE.shipLevel) return `Ships can be built beside a settlement only once it is level ${SETTLE.shipLevel}`
       if (!reg && !yardCovering(this, faction, x, y)) return `${label} must be laid down along a shipyard's white line (build a shipyard on your coast first)`
-      if (kind === 'gunship' || kind === 'zumwalt') {
+      if (kind === 'gunship' || kind === 'zumwalt' || kind === 'battleship') {
         const nb = navalBudget(this, faction)
-        if (kind === 'gunship' && !nb.canGunship) return `Naval limit: ${nb.used}/${nb.points} points used (each town supports a gunship, each upgraded town two more)`
-        if (kind === 'zumwalt' && !nb.canZumwalt) return nb.zum >= nb.zumCap ? `Zumwalts need a level 2 town each (and a shipyard per ${YARD.zumwaltsPerYard}): ${nb.zum}/${nb.zumCap} used` : `Naval limit: a Zumwalt needs ${YARD.zumwaltPoints} free points (${nb.used}/${nb.points} used)`
+        if (kind === 'battleship' && !nb.canBattleship) return nb.bs >= nb.bsCap ? `Battleship limit: ${nb.bs}/${nb.bsCap} for your ${nb.towns} towns (more towns allow more)` : nb.zum + nb.bs >= nb.upgraded ? `Every Zumwalt and battleship needs a level 2 town of its own (${nb.zum + nb.bs}/${nb.upgraded})` : `Naval limit: a battleship needs ${YARD.zumwaltPoints} free points (${nb.used}/${nb.points} used)`
+        if (kind === 'gunship' && !nb.canGunship) return nb.gun >= nb.gunCap ? `Gunboat limit: ${nb.gun}/${nb.gunCap} for your ${nb.towns} towns` : `Naval limit: ${nb.used}/${nb.points} points used (each town supports a gunship, each upgraded town two more)`
+        if (kind === 'zumwalt' && !nb.canZumwalt) return nb.zum >= nb.zumCap ? `Zumwalt limit: ${nb.zum}/${nb.zumCap} for your ${nb.towns} towns and ${nb.yards} shipyard(s)` : nb.zum + nb.bs >= nb.upgraded ? `Every Zumwalt and battleship needs a level 2 town of its own (${nb.zum + nb.bs}/${nb.upgraded})` : `Naval limit: a Zumwalt needs ${YARD.zumwaltPoints} free points (${nb.used}/${nb.points} used)`
       }
       if (stockAt(this, faction, shore.x, shore.y).lumber < cost) return `Needs ${cost} lumber`
       return null
@@ -1022,13 +1072,14 @@ export class Game {
     if (kind === 'yard') { placeYard(this, faction, x, y); return null }
     const cx = Math.floor(x / TILE), cy = Math.floor(y / TILE), home = this.nearestTown(faction, x, y)!
     const shore = isShipKind(kind) ? this.shoreFor(faction, x, y)! : undefined
-    const maxHp = kind === 'tower' ? UNIT.warrior.hp * TOWER.hpMult : kind === 'lot' ? LOT.hp : isShipKind(kind) ? (kind === 'boat' ? BOAT.hp : kind === 'zumwalt' ? ZUMWALT.hp : kind === 'cargo' ? CARGO.hp : kind === 'barge' ? BARGE.hp : GUNSHIP.hp) : 1
+    const maxHp = kind === 'tower' ? UNIT.warrior.hp * TOWER.hpMult : kind === 'lot' ? LOT.hp : isShipKind(kind) ? (kind === 'boat' ? BOAT.hp : kind === 'zumwalt' ? ZUMWALT.hp : kind === 'battleship' ? BATTLESHIP.hp : kind === 'cargo' ? CARGO.hp : kind === 'barge' ? BARGE.hp : GUNSHIP.hp) : 1
     // under construction the structure has one hit point per unit of wood already placed (none at first)
     const t: Tower = { id: this.nextId++, kind, town: home.id, faction, cx, cy, x: (cx + 0.5) * TILE, y: (cy + 0.5) * TILE, hp: 1, maxHp, progress: 0, built: false, builder: -1, archer: -1, shore }
     const at = shore ?? t
     this.spendLumber(faction, this.priceOf(kind), at.x, at.y)
     spend(this, faction, (kind === 'barge' ? 'boat' : kind) as 'tower' | 'lot' | Exclude<BoatKind, 'barge'>, this.priceOf(kind)) // (barges count with the troop boats in the lumber ledger)
     if (isShipKind(kind)) this.stats.k[faction].ships[kind].started++
+    if (kind === 'battleship') t.paid = 1 // (the keel is laid: stage one is paid)
     this.towers.push(t)
     return t
   }
@@ -1066,12 +1117,32 @@ export class Game {
     if (!keep) t.stock = 0 // (razed: the loot is carried off, the ruin keeps nothing)
     if (to === 0 || from === 0) this.say(to === 0 ? `Captured ${Math.floor(amount)} lumber with the town` : `Lost ${Math.floor(amount)} lumber with the town`)
   }
-  priceOf(kind: StructureKind) { return kind === 'yard' ? 0 : kind === 'outpost' ? OUTPOST.cost : kind === 'tower' ? TOWER.cost : kind === 'lot' ? LOT.cost : kind === 'settlement' ? SETTLE.cost : kind === 'boat' ? BOAT.cost : kind === 'zumwalt' ? ZUMWALT.cost : kind === 'cargo' ? CARGO.cost : kind === 'barge' ? BARGE.cost : GUNSHIP.cost }
-  buildTimeOf(t: Tower) { return t.kind === 'tower' ? TOWER.buildTime : t.kind === 'lot' ? LOT.buildTime : t.kind === 'boat' ? BOAT.buildTime : t.kind === 'zumwalt' ? ZUMWALT.buildTime : t.kind === 'cargo' ? CARGO.buildTime : t.kind === 'barge' ? BARGE.buildTime : GUNSHIP.buildTime }
-  costOf(t: Tower) { return this.priceOf(t.kind) }
+  priceOf(kind: StructureKind) { return kind === 'yard' ? 0 : kind === 'outpost' ? OUTPOST.cost : kind === 'tower' ? TOWER.cost : kind === 'lot' ? LOT.cost : kind === 'settlement' ? SETTLE.cost : kind === 'boat' ? BOAT.cost : kind === 'zumwalt' ? ZUMWALT.cost : kind === 'battleship' ? BATTLESHIP.cost / BATTLESHIP.stages : kind === 'cargo' ? CARGO.cost : kind === 'barge' ? BARGE.cost : GUNSHIP.cost }
+  buildTimeOf(t: Tower) { return t.kind === 'tower' ? TOWER.buildTime : t.kind === 'lot' ? LOT.buildTime : t.kind === 'boat' ? BOAT.buildTime : t.kind === 'zumwalt' ? ZUMWALT.buildTime : t.kind === 'battleship' ? BATTLESHIP.buildTime : t.kind === 'cargo' ? CARGO.buildTime : t.kind === 'barge' ? BARGE.buildTime : GUNSHIP.buildTime }
+  /** What has been paid into a structure so far (a battleship is paid in three instalments). */
+  costOf(t: Tower) { return t.kind === 'battleship' ? (BATTLESHIP.cost / BATTLESHIP.stages) * (t.paid ?? 1) : this.priceOf(t.kind) }
+  /** The next stage of a battleship: pay its instalment (from the stock of the shore it is built beside); false if the lumber is not there yet. */
+  payNextStage(t: Tower): boolean {
+    const price = BATTLESHIP.cost / BATTLESHIP.stages, at = t.shore ?? t
+    if (stockAt(this, t.faction, at.x, at.y).lumber < price) return false
+    this.spendLumber(t.faction, price, at.x, at.y)
+    spend(this, t.faction, 'battleship', price)
+    t.paid = (t.paid ?? 1) + 1; t.stalled = false
+    return true
+  }
+  /** Stalled battleships: once a second, see whether the lumber for the next stage has arrived. */
+  private updateStagedBuilds() {
+    if (this.tickCount % 25 !== 0) return
+    for (const t of this.towers) if (t.kind === 'battleship' && !t.built && t.stalled) this.payNextStage(t)
+  }
   /** Construction progress: hit points equal the wood placed so far, and jump to full strength on completion. */
   advanceBuild(t: Tower, dt: number) {
-    t.progress += dt
+    if (t.kind === 'battleship') { // built in stages: at the end of each, the next instalment must be paid before the work goes on
+      const seg = this.buildTimeOf(t) / BATTLESHIP.stages
+      if ((t.paid ?? 1) < BATTLESHIP.stages && t.progress >= seg * (t.paid ?? 1) && !this.payNextStage(t)) { t.stalled = true; t.progress = seg * (t.paid ?? 1); return }
+      t.progress += dt
+      if ((t.paid ?? 1) < BATTLESHIP.stages) t.progress = Math.min(t.progress, seg * (t.paid ?? 1))
+    } else t.progress += dt
     if (t.progress >= this.buildTimeOf(t) && isShipKind(t.kind)) { // a finished ship leaves the slipway and (beside the coast) moors there
       t.built = true; t.builder = -1
       this.towers = this.towers.filter(q => q !== t)
@@ -1212,7 +1283,7 @@ export class Game {
     this.applyRoute(u, route)
     if (raw.length >= 2) { // a route that ends on a docked friendly ship boards it on arrival
       const ex = raw[raw.length - 2], ey = raw[raw.length - 1]
-      const ship = this.boats.find(b => b.docked && b.faction === u.faction && Math.hypot(b.x - ex, b.y - ey) < (b.kind === 'zumwalt' ? 2.6 : 1.7) * TILE)
+      const ship = this.boats.find(b => b.docked && b.faction === u.faction && Math.hypot(b.x - ex, b.y - ey) < (b.kind === 'battleship' ? 3.4 : b.kind === 'zumwalt' ? 2.6 : 1.7) * TILE)
       if (ship) u.boardBoat = ship.id
     }
     return true
@@ -1383,7 +1454,7 @@ export class Game {
     let best: Boat | null = null, bd = Infinity
     for (const b of this.boats) {
       if (faction >= 0 && b.faction !== faction) continue
-      const L = shipLength(b.kind) / 2 + 12, W = b.kind === 'zumwalt' ? 50 : b.kind === 'cargo' ? 30 : b.kind === 'gunship' ? 34 : b.kind === 'barge' ? 60 : 50
+      const L = shipLength(b.kind) / 2 + 12, W = b.kind === 'battleship' ? 62 : b.kind === 'zumwalt' ? 50 : b.kind === 'cargo' ? 30 : b.kind === 'gunship' ? 34 : b.kind === 'barge' ? 60 : 50
       const vertical = b.dir === 'up' || b.dir === 'down'
       const dx = Math.abs(x - b.x), dy = Math.abs(y - b.y)
       if ((vertical ? dx < W && dy < L : dx < L && dy < W)) { const d = Math.hypot(dx, dy); if (d < bd) { bd = d; best = b } }
@@ -1421,7 +1492,7 @@ export class Game {
     this.say(err ?? 'Trade route set: the boat will shuttle between the two ports')
   }
   upgradeTown(id: number) { const err = upgradeError(this, 0, id); if (err) { this.say(err); return false } return upgradeTown(this, 0, id) }
-  setZumwaltFocus(f: ZumFocus) { if (ZUM_FOCUS.includes(f)) for (const b of this.selectedBoats()) if (b.kind === 'zumwalt') b.focus = f }
+  setZumwaltFocus(f: ZumFocus) { if (ZUM_FOCUS.includes(f)) for (const b of this.selectedBoats()) if (b.kind === 'zumwalt' || b.kind === 'battleship') b.focus = f }
   private boatHud(): HudSnapshot['boat'] {
     const all = this.inspectedBoats(), bs = all.filter(q => q.faction === 0)
     if (!all.length) return null
@@ -1433,7 +1504,7 @@ export class Game {
     const b = bs[0]
     return { rank: canRank(b.kind) ? rankInfo(b) : null, owner: this.label(0), mine: true, id: b.id, kind: b.kind, open: !!b.open, hp: Math.round(b.hp), maxHp: Math.round(b.maxHp), cargo: cargoCount(this, b), cap: b.cap, docked: b.docked, docking: b.docking && !b.docked ? Math.min(1, b.dockT / dockTimeOf(b)) : -1, blocked: b.dockBlocked, focus: b.focus, count: bs.length, zumwalts: bs.filter(q => q.kind === 'zumwalt').length, names: b.cargo.map(id => this.unitById(id)?.name ?? ''),
       load: { ...b.load }, want: { ...b.want }, unload: { ...b.unload }, trade: b.trade ? { a: this.towns[b.trade.a]?.kind === 'settlement' ? 'Settlement' : 'Town', b: this.towns[b.trade.b]?.kind === 'settlement' ? 'Settlement' : 'Town', leg: b.trade.leg } : null,
-      armed: b.kind === 'zumwalt' || b.kind === 'gunship', striking: this.strikeMode, hasStrike: !!b.strike, picking: this.routePick && this.routePick.boat === b.id ? this.routePick.step : false, pct: loadPercent(b) }
+      armed: b.kind === 'zumwalt' || b.kind === 'battleship' || b.kind === 'gunship', striking: this.strikeMode, hasStrike: !!b.strike, picking: this.routePick && this.routePick.boat === b.id ? this.routePick.step : false, pct: loadPercent(b) }
   }
 
   // ---------- selection helpers: towns & structures ----------
@@ -1494,7 +1565,7 @@ export class Game {
     }
     return {
       seed: this.world.seed, status: this.status, spectating: !!this.spectating, lumber: Math.floor(viewStock(this).stock.lumber), gold: Math.floor(viewStock(this).stock.gold), meat: Math.floor(viewStock(this).stock.meat), region: viewStock(this).settlement ? 'Settlement' : viewStock(this).land === this.kingdoms[0].homeLand ? 'Home' : 'Island', power: Math.floor(me.power), towns: this.ownedTowns(0), pop: this.pop(0), cap: this.cap(0),
-      kingdomName: me.name, title: tier.title, level: tier.level, produce: { ...me.produce }, time: this.time, speed: this.speed, placing: this.placing, navy: (({ points, used, gun, zum, zumCap, yards }) => ({ points, used, gun, zum, zumCap, yards }))(navalBudget(this, 0)),
+      kingdomName: me.name, title: tier.title, level: tier.level, produce: { ...me.produce }, time: this.time, speed: this.speed, placing: this.placing, navy: (({ points, used, gun, zum, zumCap, bs, bsCap, gunCap, yards }) => ({ points, used, gun, zum, zumCap, bs, bsCap, gunCap, yards }))(navalBudget(this, 0)),
       kingdoms: this.kingdoms.map(k => { const t = this.title(k.id); return { id: k.id, name: k.name, title: t.title, level: t.level, color: k.color, emblem: k.emblem, towns: this.ownedTowns(k.id), tiles: this.tileCounts[k.id] ?? 0, lumber: Math.floor(k.lumber), power: Math.floor(k.power), agitation: k.isPlayer ? null : Math.round(this.agit[k.id]), temperament: k.isPlayer ? null : k.temperament, ready: !!this.ready[k.id] && !k.isPlayer, allies: this.diplomacy.alliesOf(k.id), focused: this.focusKingdom === k.id, allyBlocked: k.isPlayer ? null : this.allyBlockedReason(k.id), merged: this.mergeColors.has(k.id), units: this.units.filter(u => u.faction === k.id && u.state !== 'dead').reduce((n, u) => n + u.count, 0), alive: k.alive, isPlayer: k.isPlayer, relation: this.diplomacy.get(0, k.id) } }),
       units: sel.map(u => ({ id: u.id, name: u.name, type: u.type, hp: Math.round(u.hp), maxHp: u.maxHp, count: u.count, members: u.memberNames, mode: u.mode, state: u.state, cutOff: u.cutOff, overcap: u.overcap, inTower: u.inTower >= 0, healing: this.healingAtTown(u) })),
       join: sel.length >= 2 ? { enabled: this.joinReason(ids) === null, label: this.joinLabel(ids), reason: this.joinReason(ids) } : null,

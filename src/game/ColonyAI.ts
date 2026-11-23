@@ -131,7 +131,8 @@ export function gunshipsWanted(g: Game, k: number): number {
   // an enemy Zumwalt is only ever hunted by a squadron (never a lone gunship): a nation facing one keeps at least three
   const foeZums = g.boats.filter(b => b.kind === 'zumwalt' && b.hp > 0 && g.hostile(k, b.faction)).length
   const vsZum = foeZums > 0 ? Math.min(9, 3 * Math.min(foeZums, 2)) : 0
-  if (zums > 0) return Math.min(12, Math.max(threat, vsZum, 3 * zums)) // a squad: three bonded gunships to every Zumwalt
+  const caps = navalBudget(g, k), bsN = g.boats.filter(b => b.faction === k && b.kind === 'battleship').length + g.towers.filter(t => t.faction === k && t.kind === 'battleship').length
+  if (zums > 0 || bsN > 0) return Math.max(threat, vsZum, caps.gunCap) // a nation with big ships fills its whole gunboat allowance (see FLEET_TABLE): escorts, wave hunters, patrols
   const cargo = g.boats.some(b => b.faction === k && b.kind === 'cargo')
   return Math.max(threat, vsZum, kingdom.temperament === 'imperialist' && cargo ? 1 : 0)
 }

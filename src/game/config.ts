@@ -58,9 +58,9 @@ export const UNIT: Record<UnitType, UnitStats> = {
 
 /** Boat units are never in the unit list: ships live in `game.boats`. Units aboard are hidden with inTower = BOAT_FLAG + boatId. */
 export const BOAT_FLAG = 1_000_000
-export type BoatKind = 'boat' | 'zumwalt' | 'cargo' | 'gunship' | 'barge'
-export const BOAT_KINDS: BoatKind[] = ['boat', 'zumwalt', 'cargo', 'gunship', 'barge']
-export const SHIP_NAME: Record<BoatKind, string> = { boat: 'boat', zumwalt: 'Zumwalt', cargo: 'cargo boat', gunship: 'gunship', barge: 'barge' }
+export type BoatKind = 'boat' | 'zumwalt' | 'cargo' | 'gunship' | 'barge' | 'battleship'
+export const BOAT_KINDS: BoatKind[] = ['boat', 'zumwalt', 'cargo', 'gunship', 'barge', 'battleship']
+export const SHIP_NAME: Record<BoatKind, string> = { boat: 'boat', zumwalt: 'Zumwalt', cargo: 'cargo boat', gunship: 'gunship', barge: 'barge', battleship: 'Battleship' }
 /** Resources a region (a home kingdom or a settlement) can hold. */
 export type Stock = { lumber: number; gold: number; meat: number }
 /**
@@ -77,7 +77,7 @@ export const BOAT = { cost: 50, buildTime: 30, hp: UNIT.warrior.hp * 0.5, cap: 1
  */
 export const BARGE = { cost: 100, buildTime: 40, hp: 700, cap: 12, speed: UNIT.archer.speed * 0.85, accel: 120, length: 3.4 * TILE, dockTime: 6, landDamage: 0.3, shoveTiles: 6, dockRadius: 9, dockWeight: 2.6 }
 export const ZUMWALT = {
-  cost: 300, buildTime: 60, hp: UNIT.warrior.damage * 2.5 * 12, cap: 8, // 12 direct hits from another Zumwalt (96 each) = 32 gunship hits (36 each)
+  cost: 300, buildTime: 120, hp: UNIT.warrior.damage * 2.5 * 12, cap: 8, // 12 direct hits from another Zumwalt (96 each) = 32 gunship hits (36 each)
   speed: UNIT.archer.speed * 0.95, accel: 110, length: 5 * TILE, // (5 % slower: the gunships can just about keep up)
   rangeTiles: (UNIT.archer.range * 2 * 2) / TILE, shots: 2, shotGap: 0.5, volleyGap: 3, damageMult: 2.5, minDamage: 0.1,
   fireBelow: 0.15, fireSeconds: 30, // a Zumwalt under 15 % hull burns for 30 s (cosmetic); naval fire sets it burning again
@@ -98,6 +98,20 @@ export const ZUMWALT = {
     right: { S: [[-79, 47], [-16, 47], [48, 47]], N: [[-79, -34], [-16, -34], [48, -34]] },
   } as Record<'up' | 'down' | 'left' | 'right', Partial<Record<'N' | 'E' | 'S' | 'W', [number, number][]>>>,
 }
+/**
+ * Battleship: the capital ship of the top nations. 1 500 lumber, laid down in three stages (500 lumber each, the next one paid when the previous is built).
+ * Three times a Zumwalt's hull, 70 % of its speed, 1.5x its range but blind inside 6 tiles, shells that do 80 % of a Zumwalt's damage but land twice as
+ * accurately. No broadside: two triple-barrel turrets on the deck, fore and aft, that traverse all the way round (the hull only has to be seen from above for them to turn).
+ */
+export const BATTLESHIP = {
+  cost: 1500, stages: 3, buildTime: 360, // (three stages of 120 s, as long as a Zumwalt takes to build)
+  cap: 0, hp: ZUMWALT.hp * 3, speed: ZUMWALT.speed * 0.7, accel: ZUMWALT.accel * 0.7, length: 6.6 * TILE,
+  rangeTiles: ZUMWALT.rangeTiles * 1.5, minRangeTiles: 6, damageMult: 0.8, accuracy: 2, // accuracy: its chance to land directly is twice a Zumwalt's (never above 100 %) and its misses stray half as far
+  shots: 2, shotGap: 0.45, volleyGap: 3, // a volley is one shell from each turret
+  turnRate: 2.2, // turret traverse, radians per second
+  /** Turret positions (px from the sprite centre, along the hull) for the two top-down views; the side views have the turrets drawn in. Measured on the generated sprites. */
+  turrets: { up: [-94, 110], down: [-100, 97], left: [-120, 120], right: [-120, 120] } as Record<'up' | 'down' | 'left' | 'right', [number, number]>,
+}
 /** One max-strength Zumwalt shell (point blank, against troops). */
 export const SHELL_MAX = UNIT.warrior.damage * ZUMWALT.damageMult
 /** Cargo boat: carries resources between regions. Two Zumwalt volleys (four full shells) sink it; seven gunship hits do too. */
@@ -105,8 +119,10 @@ export const GUNSHIP_DAMAGE = 36
 export const CARGO = { cost: 20, buildTime: 20, hp: GUNSHIP_DAMAGE * 7, cap: { lumber: 100, gold: 10, meat: 30 } as Stock, speed: UNIT.archer.speed * 1.1, accel: 140, length: 1.5 * TILE, loadEvery: 1.2, loadAmount: { lumber: 20, gold: 2, meat: 5 } as Stock, floatSeconds: 180 }
 /** Gunship: a pirate vessel. 10 % slower than a cargo boat (it ambushes, it cannot chase), 1.5× its health, 11-tile guns, ships only. */
 export const GUNSHIP = { cost: 60, buildTime: 30, hp: CARGO.hp * 1.5, cap: 0, speed: UNIT.archer.speed * 0.9, accel: 130, length: 2 * TILE, rangeTiles: 11, damage: GUNSHIP_DAMAGE, cooldown: 1.5 }
-export const shipLength = (k: BoatKind) => (k === 'zumwalt' ? ZUMWALT.length : k === 'cargo' ? CARGO.length : k === 'gunship' ? GUNSHIP.length : k === 'barge' ? BARGE.length : BOAT.length)
-export const SHIP_KINDS_ARMED: BoatKind[] = ['zumwalt', 'gunship']
+export const shipLength = (k: BoatKind) => (k === 'battleship' ? BATTLESHIP.length : k === 'zumwalt' ? ZUMWALT.length : k === 'cargo' ? CARGO.length : k === 'gunship' ? GUNSHIP.length : k === 'barge' ? BARGE.length : BOAT.length)
+export const SHIP_KINDS_ARMED: BoatKind[] = ['zumwalt', 'battleship', 'gunship']
+/** Zumwalts and battleships: the big-gun ships (one fleet 'slot' each, and each needs a level 2 town). */
+export const isCapitalKind = (k: string) => k === 'zumwalt' || k === 'battleship'
 
 /** A docked ship is a mini town: it claims friendly territory (and supply) around the land it is moored against. */
 export const DOCK = {
@@ -258,6 +274,22 @@ export const GOLD = {
   jackpotEvery: [2, 4], uninhabitedPerIsland: 3,
 }
 export const goldTier = (reserve: number): 1 | 2 | 3 | 4 | 5 | 6 => (reserve >= 36 ? 6 : reserve >= 22 ? 5 : reserve >= 12 ? 4 : reserve >= 5 ? 3 : reserve >= 2 ? 2 : 1)
+/**
+ * Fleet limits by number of towns (settlements do not count): the most Zumwalts and battleships a kingdom may keep, and its extra gunboats.
+ * Gunboats: 2 per Zumwalt allowed, plus the extra allowance (and a couple for the smallest nations, which have no Zumwalt). A battleship takes up as much
+ * room as a Zumwalt (2 naval points) and, like a Zumwalt, needs a level 2 town of its own. Kingdoms are meant to build up to these limits.
+ */
+export const FLEET_TABLE: { towns: number; zumwalts: number; battleships: number; extraGunboats: number }[] = [
+  { towns: 3, zumwalts: 1, battleships: 0, extraGunboats: 0 }, { towns: 5, zumwalts: 2, battleships: 0, extraGunboats: 2 }, { towns: 10, zumwalts: 3, battleships: 1, extraGunboats: 3 },
+  { towns: 15, zumwalts: 6, battleships: 1, extraGunboats: 4 }, { towns: 20, zumwalts: 8, battleships: 2, extraGunboats: 5 }, { towns: 25, zumwalts: 8, battleships: 2, extraGunboats: 6 },
+  { towns: 30, zumwalts: 10, battleships: 3, extraGunboats: 8 },
+]
+export function fleetLimits(towns: number): { zumwalts: number; battleships: number; gunboats: number } {
+  let row = { zumwalts: 0, battleships: 0, extraGunboats: 0 }
+  for (const r of FLEET_TABLE) if (towns >= r.towns) row = r
+  return { zumwalts: row.zumwalts, battleships: row.battleships, gunboats: Math.max(2 * row.zumwalts + row.extraGunboats, Math.min(towns, 2)) }
+}
+
 /**
  * Shipyards and the naval budget. A yard is free; it opens a stretch of coast `zoneTiles` either side of it (a 10-tile white line) where ships may be
  * laid down, and one yard hosts at most `zumwaltsPerYard` (5) Zumwalts. Each town supports one gunboat; an upgraded (level 2) town, or a barracks, adds two more gunboats OR one Zumwalt

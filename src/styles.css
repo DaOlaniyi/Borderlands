@@ -320,3 +320,12 @@ b.mk-war, b.mk-town, b.mk-elim { padding: 0 4px; border-radius: 2px; display: in
 .spectating .hud-top, .spectating .produce, .spectating .shop, .spectating .hud-sel, .spectating .help, .spectating .toast.banner { display: none; }
 .spectate-banner { position: absolute; top: 12px; left: 12px; display: flex; gap: 12px; align-items: center; padding: 8px 14px; z-index: 5; }
 .spectate-banner span { opacity: .75; font-size: 13px; }
+
+.ntag { cursor: pointer; }
+.kcard { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); width: 270px; z-index: 6; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; font-size: 13px; }
+.kcard-head { display: flex; gap: 8px; align-items: center; } .kcard-head > div { flex: 1; display: flex; flex-direction: column; line-height: 1.2; } .kcard-head b { font-size: 14px; } .kcard-head small { opacity: .7; }
+.kcard-head i { width: 14px; height: 14px; border-radius: 3px; border: 1.5px solid #1b130b; }
+.kcard-army { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid rgba(60,40,20,.25); padding-top: 6px; } .kcard-army span { opacity: .65; font-size: 12px; }
+.kcard ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; } .kcard li { display: flex; justify-content: space-between; }
+.kcard-row { display: flex; justify-content: space-between; gap: 10px; } .kcard-row span { opacity: .65; }
+.kcard .tsbtn { margin-top: 4px; }

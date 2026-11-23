@@ -158,6 +158,8 @@ export type StrikeTarget = { kind: 'ground' | 'boat' | 'tower' | 'town' | 'unit'
 
 export type Tower = {
   id: number
+  paid?: number // battleship under construction: how many of its three stages have been paid for (1 once laid down)
+  stalled?: boolean // battleship: the next stage is waiting for lumber (the work stops there)
   kind: 'tower' | 'lot' | 'settlement' | BoatKind // boat / zumwalt: a ship under construction in the water (pawns build it from `shore`)
   shore?: { x: number; y: number } // land point the builder stands on
   town: number // the town this structure belongs to; it changes hands when the town does
@@ -180,6 +182,7 @@ export type Outpost = { id: number; faction: number; cx: number; cy: number; x: 
 export type BoatDir = 'up' | 'down' | 'left' | 'right'
 export type Boat = {
   id: number
+  tAng?: [number, number] // battleship: where its two deck turrets point (radians, east = 0), turning towards the target
   rank?: number // gunship / Zumwalt: 0 = no rank ... 11 = brigadier general (see Ranks.ts); absent in older saves
   xp?: number
   pendXp?: number // XP for damage taken, banked once the encounter is over and the ship still floats

@@ -1,4 +1,4 @@
-import { AI, BARGE, BOAT, BOAT_FLAG, CARGO, DOCK, GUNSHIP, SETTLE, SHIP_NAME, TILE, shipLength, TOWER, TOWN, TURN, UNIT, ZUMWALT, type BoatKind, type Stock } from './config'
+import { AI, BARGE, BATTLESHIP, BOAT, BOAT_FLAG, CARGO, DOCK, GUNSHIP, SETTLE, SHIP_NAME, TILE, shipLength, TOWER, TOWN, TURN, UNIT, ZUMWALT, isCapitalKind, type BoatKind, type Stock } from './config'
 import { damageTower, damageTown, damageUnit, knockback } from './CombatSystem'
 import type { Game } from './Game'
 import { followRoute } from './MovementSystem'
@@ -12,14 +12,16 @@ import { awardXp, bankSurvivalXp, canRank, rankMult, RANK_TUNE, xpForHit, xpForK
 export type Shell = { x0: number; y0: number; x1: number; y1: number; t: number; dur: number; dmg: number; faction: number; kind: 'boat' | 'tower' | 'town' | 'unit' | 'ground'; id: number; src: number; direct: boolean; splash: boolean }
 type Target = { kind: Shell['kind']; id: number; x: number; y: number }
 
-export const boatStats = (k: BoatKind) => (k === 'boat' ? BOAT : k === 'zumwalt' ? ZUMWALT : k === 'cargo' ? CARGO : k === 'barge' ? BARGE : GUNSHIP)
+export const boatStats = (k: BoatKind) => (k === 'boat' ? BOAT : k === 'zumwalt' ? ZUMWALT : k === 'battleship' ? BATTLESHIP : k === 'cargo' ? CARGO : k === 'barge' ? BARGE : GUNSHIP)
 export const emptyStock = (): Stock => ({ lumber: 0, gold: 0, meat: 0 })
 export const stockTotal = (s: Stock) => s.lumber + s.gold + s.meat
 /** Mooring on a peaceful nation's shore violates its border, unless the ship is an empty warship (Zumwalt or gunship, no troops aboard): tying up at a dock is no landing. Cargo boats, infantry boats and barges still count. */
-export const isLandingShip = (b: Pick<Boat, 'kind' | 'cargo'>) => !((b.kind === 'zumwalt' || b.kind === 'gunship') && b.cargo.length === 0)
-export const isArmed = (b: Boat) => b.kind === 'zumwalt' || b.kind === 'gunship'
+export const isLandingShip = (b: Pick<Boat, 'kind' | 'cargo'>) => !((isCapitalKind(b.kind) || b.kind === 'gunship') && b.cargo.length === 0)
+export const isArmed = (b: Boat) => isCapitalKind(b.kind) || b.kind === 'gunship'
+/** Gun range in tiles: a battleship reaches 1.5x as far as a Zumwalt. */
+export const gunRangeTiles = (b: Pick<Boat, 'kind'>) => (b.kind === 'battleship' ? BATTLESHIP.rangeTiles : b.kind === 'zumwalt' ? ZUMWALT.rangeTiles : GUNSHIP.rangeTiles)
 /** Radius (px) used to hit-test and target a ship. */
-export const boatRadius = (b: Boat) => (b.kind === 'zumwalt' ? 80 : b.kind === 'barge' ? 54 : 46)
+export const boatRadius = (b: Boat) => (b.kind === 'battleship' ? 100 : b.kind === 'zumwalt' ? 80 : b.kind === 'barge' ? 54 : 46)
 export const isAboard = (u: { inTower: number }) => u.inTower >= BOAT_FLAG
 const N4: [number, number][] = [[0, -1], [1, 0], [0, 1], [-1, 0]]
 
@@ -221,7 +223,7 @@ export function damageBoat(g: Game, b: Boat, amount: number, attackerFaction: nu
   if (src >= 0 && attackerFaction !== b.faction) { const shooter = g.boatById(src); if (shooter && shooter.hp > 0 && canRank(shooter.kind)) awardXp(g, shooter, xpForHit(b, dealt)) }
   if (canRank(b.kind) && attackerFaction !== b.faction) { b.pendXp = (b.pendXp ?? 0) + dealt * RANK_TUNE.taken; b.hitAt = g.time }
   g.fx.push({ kind: 'hit', x: b.x, y: b.y - 10, t: 0 })
-  if (b.kind === 'zumwalt' && b.hp > 0 && b.hp < b.maxHp * ZUMWALT.fireBelow && (naval || wasHealthy)) b.fireT = ZUMWALT.fireSeconds // (cosmetic) set alight on dropping below 15 %, and again by every later hit from a ship's guns
+  if (isCapitalKind(b.kind) && b.hp > 0 && b.hp < b.maxHp * ZUMWALT.fireBelow && (naval || wasHealthy)) b.fireT = ZUMWALT.fireSeconds // (cosmetic) set alight on dropping below 15 %, and again by every later hit from a ship's guns
   if (b.hp <= 0) sinkBoat(g, b, attackerFaction, src)
 }
 
@@ -242,7 +244,7 @@ export function sinkBoat(g: Game, b: Boat, by = -1, src = -1) {
   if (!b.docked && stockTotal(b.load) > 0) g.floaters.push({ id: g.allocId(), x: b.x, y: b.y, load: { ...b.load }, t: 0 }) // cargo floats until somebody scoops it up
   b.load = emptyStock()
   b.cargo = []
-  if (b.kind === 'zumwalt') g.wrecks.push({ kind: b.kind, faction: b.faction, dir: b.dir, flip: b.flip, x: b.x, y: b.y, t: 0, list: b.id % 2 ? 1 : -1 }) // a Zumwalt does not just vanish: it rolls over and goes down
+  if (isCapitalKind(b.kind)) g.wrecks.push({ kind: b.kind, faction: b.faction, dir: b.dir, flip: b.flip, x: b.x, y: b.y, t: 0, list: b.id % 2 ? 1 : -1 }) // a Zumwalt does not just vanish: it rolls over and goes down
   g.boats = g.boats.filter(q => q !== b)
   if (g.selection?.kind === 'boats') { const ids = g.selection.ids.filter(i => i !== b.id); g.selection = ids.length ? { kind: 'boats', ids } : null }
   g.fx.push({ kind: 'boom', x: b.x, y: b.y, t: 0 }); g.fx.push({ kind: 'splash', x: b.x, y: b.y, t: 0 }); g.sounds.push({ name: 'boom', x: b.x, y: b.y })
@@ -253,11 +255,13 @@ export function sinkBoat(g: Game, b: Boat, by = -1, src = -1) {
 
 // ---------------------------------------------------------------- Zumwalt gunnery
 /** Damage multiplier by distance: 100 % point blank, falling linearly to 10 % at maximum range. */
-export const zumwaltFalloff = (dist: number) => { const r = ZUMWALT.rangeTiles * TILE; return Math.max(ZUMWALT.minDamage, 1 - (1 - ZUMWALT.minDamage) * Math.min(1, dist / r)) }
+export const shellFalloff = (dist: number, rangeTiles: number) => { const r = rangeTiles * TILE; return Math.max(ZUMWALT.minDamage, 1 - (1 - ZUMWALT.minDamage) * Math.min(1, dist / r)) }
+export const zumwaltFalloff = (dist: number) => shellFalloff(dist, ZUMWALT.rangeTiles)
 
 function nearestIn<T extends { x: number; y: number }>(b: Boat, range: number, list: T[], f: (t: T) => Target): Target | null {
   let best: Target | null = null, bd = range
-  for (const t of list) { const d = Math.hypot(t.x - b.x, t.y - b.y); if (d < bd) { bd = d; best = f(t) } }
+  const minD = b.kind === 'battleship' ? BATTLESHIP.minRangeTiles * TILE : 0 // (a battleship cannot shoot what is inside 6 tiles)
+  for (const t of list) { const d = Math.hypot(t.x - b.x, t.y - b.y); if (d < bd && d >= minD) { bd = d; best = f(t) } }
   return best
 }
 
@@ -266,7 +270,7 @@ function nearestIn<T extends { x: number; y: number }>(b: Boat, range: number, l
  * are already shooting at wins, then the weakest, then the nearest.
  */
 function zumwaltInRange(g: Game, b: Boat, range: number): Target | null {
-  const zs = g.boats.filter(o => o.kind === 'zumwalt' && o.hp > 0 && g.hostile(b.faction, o.faction) && Math.hypot(o.x - b.x, o.y - b.y) <= range)
+  const zs = g.boats.filter(o => isCapitalKind(o.kind) && o.hp > 0 && g.hostile(b.faction, o.faction) && Math.hypot(o.x - b.x, o.y - b.y) <= range)
   if (!zs.length) return null
   const mates = g.boats.filter(o => o !== b && o.kind === 'gunship' && o.hp > 0 && (o.faction === b.faction || g.diplomacy.allied(o.faction, b.faction)))
   const aimed = (z: Boat) => mates.reduce((n, m) => n + ((m.target?.kind === 'boat' && m.target.id === z.id) || (m.strike?.kind === 'boat' && m.strike.id === z.id) ? 1 : 0), 0)
@@ -287,11 +291,11 @@ function pickShipTarget(g: Game, b: Boat, range: number): Target | null {
   if (cargo) return cargo
   const ship = nearestIn(b, range, foes, asBoat)
   if (ship) return ship
-  return nearestIn(b, range, g.towers.filter(t => !t.built && g.hostile(b.faction, t.faction) && (t.kind === 'boat' || t.kind === 'barge' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'zumwalt')), t => ({ kind: 'tower', id: t.id, x: t.x, y: t.y }))
+  return nearestIn(b, range, g.towers.filter(t => !t.built && g.hostile(b.faction, t.faction) && (t.kind === 'boat' || t.kind === 'barge' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'zumwalt' || t.kind === 'battleship')), t => ({ kind: 'tower', id: t.id, x: t.x, y: t.y }))
 }
 
 function pickTarget(g: Game, b: Boat): Target | null {
-  const range = ZUMWALT.rangeTiles * TILE
+  const range = gunRangeTiles(b) * TILE
   const near = <T extends { x: number; y: number }>(list: T[], f: (t: T) => Target): Target | null => nearestIn(b, range, list, f)
   const classes: Record<string, () => Target | null> = {
     ships: () => near(g.boats.filter(o => o !== b && o.hp > 0 && g.hostile(b.faction, o.faction)), o => ({ kind: 'boat', id: o.id, x: o.x, y: o.y })),
@@ -342,7 +346,7 @@ export function setStrike(g: Game, b: Boat, x: number, y: number) {
   for (const t of g.towns) if (!t.ruined && t.owner >= 0 && t.owner !== b.faction) consider('town', t.id, t.x, t.y)
   for (const u of g.units) if (u.state !== 'dead' && u.inTower < 0 && u.faction !== b.faction) consider('unit', u.id, u.x, u.y)
   const pick = best as Target | null
-  b.strike = pick ? { kind: pick.kind as Exclude<Target['kind'], never>, id: pick.id, x: pick.x, y: pick.y } : b.kind === 'zumwalt' ? { kind: 'ground', id: -1, x, y } : null
+  b.strike = pick ? { kind: pick.kind as Exclude<Target['kind'], never>, id: pick.id, x: pick.x, y: pick.y } : isCapitalKind(b.kind) ? { kind: 'ground', id: -1, x, y } : null
   b.loading = 0
 }
 /** AI / scripted order: engage this specific enemy (an entity, not ground). */
@@ -367,9 +371,48 @@ function quarterTurn(b: Boat, want: Side) {
 export const zumwaltDirectChance = (dist: number) => { const f = Math.min(1, dist / (ZUMWALT.rangeTiles * TILE)); return ZUMWALT.directBase + (ZUMWALT.directFar - ZUMWALT.directBase) * f }
 export const zumwaltSpread = (dist: number) => ZUMWALT.spreadTiles * TILE * Math.min(1, dist / (ZUMWALT.rangeTiles * TILE))
 
+// ---------------------------------------------------------------- Battleship turrets
+/** Where turret `i` (0 = the one at the top/left of the hull, 1 = the other) sits, in world px. */
+export function turretPos(b: Pick<Boat, 'x' | 'y' | 'dir'>, i: number): { x: number; y: number } {
+  const off = BATTLESHIP.turrets[b.dir][i]
+  return b.dir === 'up' || b.dir === 'down' ? { x: b.x, y: b.y + off } : { x: b.x + off, y: b.y }
+}
+/** The angle (east = 0) a turret rests at: outward from the middle of the hull, along it. */
+const restAngle = (b: Pick<Boat, 'dir'>, i: number) => (b.dir === 'up' || b.dir === 'down' ? (i === 0 ? -Math.PI / 2 : Math.PI / 2) : i === 0 ? Math.PI : 0)
+const angDiff = (a: number, c: number) => { let d = (a - c) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d }
+/** The turrets swing towards the current target (or back to rest), at BATTLESHIP.turnRate. */
+function updateTurrets(g: Game, b: Boat, dt: number) {
+  if (!b.tAng) b.tAng = [restAngle(b, 0), restAngle(b, 1)]
+  const tg = b.target && !b.docked ? (b.target.kind === 'ground' ? b.target : locate(g, b.target)) : null
+  for (let i = 0; i < 2; i++) {
+    const p = turretPos(b, i)
+    const want = tg ? Math.atan2(tg.y - p.y, tg.x - p.x) : restAngle(b, i)
+    const d = angDiff(want, b.tAng[i]), step = BATTLESHIP.turnRate * dt
+    b.tAng[i] += Math.abs(d) <= step ? d : Math.sign(d) * step
+  }
+}
+/** One shell from the next turret in turn, once that turret has swung onto the target: 80 % of a Zumwalt's damage, but twice as likely to land (and its misses stray half as far). */
+function fireBattleship(g: Game, b: Boat, tg: Target): boolean {
+  if (!b.tAng) b.tAng = [restAngle(b, 0), restAngle(b, 1)]
+  const i = b.muzzle % 2, p = turretPos(b, i), ang = Math.atan2(tg.y - p.y, tg.x - p.x), d = Math.hypot(tg.x - p.x, tg.y - p.y)
+  if (tg.kind !== 'ground' && d < BATTLESHIP.minRangeTiles * TILE) return false
+  if (Math.abs(angDiff(b.tAng[i], ang)) > 0.3) return false // (still swinging round)
+  b.muzzle++
+  const mx = p.x + Math.cos(ang) * 34, my = p.y + Math.sin(ang) * 34
+  const f = Math.min(1, d / (BATTLESHIP.rangeTiles * TILE))
+  const direct = tg.kind !== 'ground' && g.rng.next() < Math.min(1, (ZUMWALT.directBase + (ZUMWALT.directFar - ZUMWALT.directBase) * f) * BATTLESHIP.accuracy)
+  let ix = tg.x, iy = tg.y
+  if (!direct) { const a = g.rng.next() * Math.PI * 2, r = (ZUMWALT.spreadTiles * TILE * f / BATTLESHIP.accuracy) * Math.sqrt(g.rng.next()); ix += Math.cos(a) * r; iy += Math.sin(a) * r }
+  g.shells.push({ x0: mx, y0: my - 6, x1: ix, y1: iy - 10, t: 0, dur: 0.35 + d / 1800, dmg: SHELL_DAMAGE * BATTLESHIP.damageMult * shellFalloff(d, BATTLESHIP.rangeTiles) * rankMult(b), faction: b.faction, kind: tg.kind, id: tg.id, src: b.id, direct, splash: true })
+  g.sounds.push({ name: 'cannon', x: mx, y: my })
+  g.fx.push({ kind: 'hit', x: mx, y: my - 8, t: 0 })
+  return true
+}
+
 function fire(g: Game, b: Boat) {
   const tg = b.target ? (b.target.kind === 'ground' ? b.target : locate(g, b.target)) : null
   if (!tg) return false
+  if (b.kind === 'battleship') return fireBattleship(g, b, tg)
   const flank: Side = standing(b) ? (tg.x >= b.x ? 'E' : 'W') : tg.y >= b.y ? 'S' : 'N' // the flank facing the target
   b.side = flank
   const guns = ZUMWALT.muzzles[b.dir][flank]!, off = guns[b.muzzle++ % guns.length], mx = b.x + off[0], my = b.y + off[1] // (the cannons take turns: a volley of two uses two of the three, and the next volley carries on round)
@@ -430,6 +473,7 @@ function landShells(g: Game, dt: number) {
   g.shells = rest
   for (const s of landed) {
     g.fx.push({ kind: 'boom', x: s.x1, y: s.y1 + 10, t: 0 }); g.sounds.push({ name: 'boom', x: s.x1, y: s.y1 })
+    if (s.splash && g.isLandAt(s.x1, s.y1 + 10)) g.noteBombardment(s.x1, s.y1 + 10, g.boatById(s.src)?.kind === 'battleship' ? 1.3 : 1) // (cosmetic: heavily shelled ground catches fire)
     if (s.splash) burst(g, s)
     else if (s.kind === 'boat') { const t = g.boatById(s.id); if (t) damageBoat(g, t, s.dmg, s.faction, true, s.src); else g.fx.push({ kind: 'splash', x: s.x1, y: s.y1, t: 0 }) } // a gunship's round
     else if (s.kind === 'tower') { const t = g.towerById(s.id); if (t) damageTower(g, t, s.dmg, s.faction) }
@@ -485,10 +529,11 @@ export function updateBoats(g: Game, dt: number) {
     if (b.docking && !b.docked && g.tickCount % 25 === 0) defendShore(g, b)
     if (isArmed(b) && b.docked && b.strike) { // a moored warship with a chosen target casts off and goes after it
       const man = manualTarget(g, b)
-      if (man) approachTarget(g, b, man, (b.kind === 'zumwalt' ? ZUMWALT.rangeTiles : GUNSHIP.rangeTiles) * TILE, dt)
+      if (man) approachTarget(g, b, man, gunRangeTiles(b) * TILE, dt)
     }
     if (aiZumwalt(g, b) && !b.docked) { shoreDiscipline(g, b); protectZumwalt(g, b) }
-    if (b.kind === 'zumwalt' && !b.docked) aimAndFire(g, b, dt, moving)
+    if (b.kind === 'battleship') updateTurrets(g, b, dt)
+    if (isCapitalKind(b.kind) && !b.docked) aimAndFire(g, b, dt, moving)
     else if (b.kind === 'gunship' && !b.docked) gunshipFire(g, b, dt)
     else { b.shotsLeft = 0; b.target = null }
     if (b.kind === 'cargo' || b.kind === 'gunship') scoop(g, b)
@@ -529,7 +574,7 @@ export function hostileShoreNear(g: Game, faction: number, x: number, y: number,
   }
   return false
 }
-const aiZumwalt = (g: Game, b: Boat) => b.kind === 'zumwalt' && !g.kingdoms[b.faction].isPlayer
+const aiZumwalt = (g: Game, b: Boat) => isCapitalKind(b.kind) && !g.kingdoms[b.faction].isPlayer
 
 /**
  * How far (tiles) an AI Zumwalt keeps from a gunship: just outside its guns (11 tiles), and no farther, because a shell's chance of landing
@@ -604,13 +649,13 @@ function nearestSea(g: Game, x: number, y: number, maxTiles = 14): { x: number; 
  * snapped to open water so the pathfinder takes it round any land in between. Re-planned every few seconds.
  */
 function approachTarget(g: Game, b: Boat, tg: Target, range: number, dt: number) {
-  if (b.kind === 'zumwalt' && evading(g, b)) return // (backing away from gunships: no going after anything meanwhile)
+  if (isCapitalKind(b.kind) && evading(g, b)) return // (backing away from gunships: no going after anything meanwhile)
   b.loading -= dt
   if (b.loading > 0) return
   b.loading = 3
   const ground = tg.kind === 'ground'
   const prey = tg.kind === 'boat' ? g.boatById(tg.id) : null
-  const rush = b.kind === 'gunship' && prey?.kind === 'zumwalt' // (a gunship goes right up to a Zumwalt: it is under the big guns' best range at a distance and cannot be missed up close)
+  const rush = b.kind === 'gunship' && !!prey && isCapitalKind(prey.kind) // (a gunship goes right up to a Zumwalt: it is under the big guns' best range at a distance and cannot be missed up close)
   const stand = rush ? 2.5 * TILE : ground ? range * 0.85 : Math.min(range * 0.9, standTiles(b, tg.kind) * TILE), d = Math.hypot(tg.x - b.x, tg.y - b.y)
   if (d <= (ground ? range * 0.95 : stand * 1.15)) return // (a bare patch of ground is shelled from anywhere in range)
   const ux = (b.x - tg.x) / d, uy = (b.y - tg.y) / d
@@ -627,7 +672,7 @@ function approachTarget(g: Game, b: Boat, tg: Target, range: number, dt: number)
     spot = nearestSea(g, t.x + (dx / dd) * 13.6 * TILE, t.y + (dy / dd) * 13.6 * TILE)
   }
   if (spot && aiZumwalt(g, b) && hostileShoreNear(g, b.faction, spot.x, spot.y)) { // a firing station must keep the shore standoff: find safe water within range of the target
-    const safe = safeWater(g, b.faction, tg.x, tg.y, ZUMWALT.rangeTiles * 0.95, { x: tg.x, y: tg.y, range: range * 0.95 })
+    const safe = safeWater(g, b.faction, tg.x, tg.y, gunRangeTiles(b) * 0.95, { x: tg.x, y: tg.y, range: range * 0.95 })
     if (safe) spot = safe; else { b.strike = null; b.target = null; return } // the target sits too deep inland to shell from safe water: leave it
   }
   if (spot && Math.hypot(spot.x - b.x, spot.y - b.y) > 2 * TILE) orderSail(g, b, [spot.x, spot.y])
@@ -685,7 +730,7 @@ function shoreDiscipline(g: Game, b: Boat) {
   const spot = safeWater(g, b.faction, b.x, b.y, 22, undefined, b.standoff ?? SHORE_STANDOFF)
   if (!spot) return
   const man = b.strike && b.strike.kind !== 'ground' ? manualTarget(g, b) : null
-  if (man && Math.hypot(man.x - spot.x, man.y - spot.y) > ZUMWALT.rangeTiles * TILE) { b.strike = null; b.target = null } // too far inland to shell from safe water
+  if (man && Math.hypot(man.x - spot.x, man.y - spot.y) > gunRangeTiles(b) * TILE) { b.strike = null; b.target = null } // too far inland to shell from safe water
   if (Math.hypot(spot.x - b.x, spot.y - b.y) > 1.5 * TILE) { b.loading = 3; orderSail(g, b, [spot.x, spot.y]) }
 }
 
@@ -693,7 +738,8 @@ function shoreDiscipline(g: Game, b: Boat) {
 /** Pick a target now and then, swing the broadside toward it, lock on (4 s for a new target) and fire bursts once it faces the right way. */
 function aimAndFire(g: Game, b: Boat, dt: number, sailing: boolean) {
   b.scanT -= dt
-  const range = ZUMWALT.rangeTiles * TILE
+  const bs = b.kind === 'battleship', G = bs ? BATTLESHIP : ZUMWALT
+  const range = gunRangeTiles(b) * TILE
   if (b.scanT <= 0) {
     b.scanT = 0.4
     const man = manualTarget(g, b)
@@ -706,27 +752,35 @@ function aimAndFire(g: Game, b: Boat, dt: number, sailing: boolean) {
     if (man && !sailing && !b.retaliating) approachTarget(g, b, man, range, dt) }
   if (!sailing && !b.retaliating && aiZumwalt(g, b) && !evading(g, b) && b.target?.kind === 'boat') { // a lighter ship far off: close to the distance where the shells land (never nearer than its guns reach)
     const tg = locate(g, b.target), o = tg ? g.boatById(tg.id) : null
-    if (tg && o && o.kind !== 'zumwalt' && Math.hypot(tg.x - b.x, tg.y - b.y) > (KITE_TILES + 3) * TILE) approachTarget(g, b, tg, range, dt)
+    if (tg && o && !isCapitalKind(o.kind) && Math.hypot(tg.x - b.x, tg.y - b.y) > (KITE_TILES + 3) * TILE) approachTarget(g, b, tg, range, dt)
   }
   const tg = b.target ? (b.target.kind === 'ground' ? b.target : locate(g, b.target)) : null
   if (!tg) { b.target = null; b.shotsLeft = 0; b.turnT = 0; if (b.volleyCd > 0) b.volleyCd -= dt; return }
   const key = `${tg.kind}:${tg.kind === 'ground' ? Math.round(tg.x / 8) + ',' + Math.round(tg.y / 8) : tg.id}`
   if (key !== b.lockKey) { b.lockKey = key; b.lockT = b.retaliating ? 0.4 : ZUMWALT.lockSeconds; b.shotsLeft = 0; if (b.retaliating) b.volleyCd = 0 } // (a ship under fire shoots back at once) // new target: the guns need time to lock on
-  const want = sideToward(tg.x - b.x, tg.y - b.y)
-  const aimed = sailing || bearsOn(b, want) // the guns traverse while the ship is under way: it can strike while moving
-  if (bearsOn(b, want)) b.side = want
-  if (!aimed && !sailing) { // stationary and neither flank bears: a quarter turn
-    b.turnT += dt
-    if (b.turnT >= TURN.quarter) { b.turnT = 0; quarterTurn(b, want) }
-  } else b.turnT = 0
+  const dist = Math.hypot(tg.x - b.x, tg.y - b.y)
+  if (bs && tg.kind !== 'ground' && dist < BATTLESHIP.minRangeTiles * TILE) { b.shotsLeft = 0; return } // (a battleship cannot shoot what is inside 6 tiles)
+  let aimed: boolean
+  if (bs) { // no broadside: the deck turrets traverse all the way round, so the hull only has to be seen from above (bow up or down) for them to turn
+    aimed = true
+    if (!sailing && !standing(b)) { b.turnT += dt; if (b.turnT >= TURN.quarter) { b.turnT = 0; b.dir = 'up'; b.flip = false } } else b.turnT = 0
+  } else {
+    const want = sideToward(tg.x - b.x, tg.y - b.y)
+    aimed = sailing || bearsOn(b, want) // the guns traverse while the ship is under way: it can strike while moving
+    if (bearsOn(b, want)) b.side = want
+    if (!aimed && !sailing) { // stationary and neither flank bears: a quarter turn
+      b.turnT += dt
+      if (b.turnT >= TURN.quarter) { b.turnT = 0; quarterTurn(b, want) }
+    } else b.turnT = 0
+  }
   if (b.lockT > 0) { b.lockT -= dt; return }
   if (b.shotsLeft > 0) {
     if (!aimed) return // the burst waits for the guns to bear
     b.shotT -= dt
-    if (b.shotT <= 0) { fire(g, b); b.shotsLeft--; b.shotT = ZUMWALT.shotGap; if (b.shotsLeft <= 0) b.volleyCd = ZUMWALT.volleyGap }
+    if (b.shotT <= 0 && fire(g, b)) { b.shotsLeft--; b.shotT = G.shotGap; if (b.shotsLeft <= 0) b.volleyCd = G.volleyGap } // (a battleship's turret that has not yet swung round just waits)
   } else {
     b.volleyCd -= dt
-    if (b.volleyCd <= 0 && aimed) { b.shotsLeft = ZUMWALT.shots; b.shotT = 0 }
+    if (b.volleyCd <= 0 && aimed) { b.shotsLeft = G.shots; b.shotT = 0 }
   }
 }
 

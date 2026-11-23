@@ -30,23 +30,24 @@ describe('shipyards', () => {
     expect(yardShoreCells(g, y).length).toBeGreaterThanOrEqual(YARD.zoneTiles)
   })
   it('a town supports one gunboat; an upgraded town two more, or one Zumwalt; Zumwalts also need a yard per five', () => {
-    const g = withYards(mk(), 0); g.kingdoms[0].lumber = 5000; g.kingdoms[0].gold = 20
+    const g = withYards(mk({ towns: [[0, 20, 20], [0, 20, 24], [0, 20, 16], [1, 80, 20]] }), 0); g.kingdoms[0].lumber = 5000; g.kingdoms[0].gold = 20 // (three towns: the smallest fleet allowance)
     let nb = navalBudget(g, 0)
-    expect(nb.points).toBe(1); expect(nb.canGunship).toBe(true); expect(nb.canZumwalt).toBe(false)
+    expect(nb.points).toBe(3); expect(nb.canGunship).toBe(true); expect(nb.canZumwalt).toBe(false)
     expect(g.structureError('zumwalt', 0, px(31), px(20))).toMatch(/level 2/)
     expect(upgradeTown(g, 0, g.towns[0].id)).toBe(true)
     nb = navalBudget(g, 0)
-    expect(nb.points).toBe(1 + YARD.upgradePoints); expect(nb.zumCap).toBe(1); expect(nb.canZumwalt).toBe(true)
+    expect(nb.points).toBe(3 + YARD.upgradePoints); expect(nb.zumCap).toBe(1); expect(nb.canZumwalt).toBe(true)
     const z = g.placeBoat(0, 'zumwalt', px(31), px(20))!
     expect(z).toBeTruthy()
     nb = navalBudget(g, 0)
-    expect(nb.zum).toBe(1); expect(nb.canZumwalt).toBe(false); expect(nb.canGunship).toBe(true) // 2 of 3 points used: one gunboat left
+    expect(nb.zum).toBe(1); expect(nb.canZumwalt).toBe(false); expect(nb.canGunship).toBe(true) // (3 towns: one Zumwalt and two gunboats allowed)
     expect(g.placeBoat(0, 'gunship', px(31), px(24))).toBeTruthy()
+    expect(g.placeBoat(0, 'gunship', px(31), px(16))).toBeTruthy()
     expect(navalBudget(g, 0).canGunship).toBe(false)
-    expect(g.structureError('gunship', 0, px(31), px(16))).toMatch(/limit/)
+    expect(g.structureError('gunship', 0, px(31), px(28))).toMatch(/limit/)
     expect(YARD.zumwaltsPerYard).toBe(5)
     for (let i = 0; i < 6; i++) spawnBoat(g, 0, 'cargo', px(40 + i), px(30))       // cargo and infantry boats are outside the cap
-    expect(navalBudget(g, 0).used).toBe(YARD.zumwaltPoints + YARD.gunshipPoints)
+    expect(navalBudget(g, 0).used).toBe(YARD.zumwaltPoints + 2 * YARD.gunshipPoints)
   })
   it('an AI places its one shipyard within the first 20 seconds; it is lost with its ground', () => {
     const g = mk({ ai: true })

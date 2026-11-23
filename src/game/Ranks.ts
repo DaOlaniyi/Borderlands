@@ -1,6 +1,6 @@
 import type { Game } from './Game'
 import type { Boat } from './types'
-import type { BoatKind } from './config'
+import { SHIP_NAME, type BoatKind } from './config'
 import { boatStats } from './BoatSystem'
 import { logEvent } from './Stats'
 
@@ -40,7 +40,7 @@ export const RANK_TUNE = {
   killRankBonus: 0.1, // +10 % of that per rank the victim held
 }
 
-export const canRank = (kind: BoatKind) => kind === 'zumwalt' || kind === 'gunship'
+export const canRank = (kind: BoatKind) => kind === 'zumwalt' || kind === 'battleship' || kind === 'gunship'
 export const rankOf = (b: Pick<Boat, 'rank'>) => b.rank ?? 0
 
 /** The share by which a rank raises health, damage and speed (0 for no rank, topBonus for the top rank), growing geometrically in between. */
@@ -74,18 +74,18 @@ export function awardXp(g: Game, b: Boat, amount: number) {
   b.rank = level
   b.maxHp = boatStats(b.kind).hp * (1 + rankBonus(level))
   b.hp = b.maxHp * frac
-  const what = `${g.label(b.faction)} ${b.kind === 'zumwalt' ? 'Zumwalt' : 'gunship'}`
-  if (b.faction === 0) g.say(`Your ${b.kind === 'zumwalt' ? 'Zumwalt' : 'gunship'} was promoted to ${RANKS[level].name}`)
+  const what = `${g.label(b.faction)} ${SHIP_NAME[b.kind]}`
+  if (b.faction === 0) g.say(`Your ${SHIP_NAME[b.kind]} was promoted to ${RANKS[level].name}`)
   if (level >= 7 || b.faction === 0) logEvent(g, 'ship', `${what} promoted to ${RANKS[level].name}`, b.faction)
 }
 
 /** XP for hitting ship `victim` for `dealt` points of damage. */
 export function xpForHit(victim: Boat, dealt: number) {
-  return dealt * (victim.kind === 'zumwalt' || victim.kind === 'gunship' ? RANK_TUNE.dealt : RANK_TUNE.dealtUnarmed)
+  return dealt * (canRank(victim.kind) ? RANK_TUNE.dealt : RANK_TUNE.dealtUnarmed)
 }
 /** XP for the killing blow on `victim`: a share of its whole hull, bigger the higher its rank. */
 export function xpForKill(victim: Boat) {
-  const armed = victim.kind === 'zumwalt' || victim.kind === 'gunship'
+  const armed = canRank(victim.kind)
   return victim.maxHp * RANK_TUNE.kill * (armed ? 1 : 0.5) * (1 + RANK_TUNE.killRankBonus * rankOf(victim))
 }
 

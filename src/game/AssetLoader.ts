@@ -23,6 +23,7 @@ const url = (p: string) => BASE + p.split('/').map(encodeURIComponent).join('/')
 const FRAME_W: Record<string, number> = { foam: 192, tree: 192, bush: 128, unit: 192, lancer: 320 }
 
 export type Assets = {
+  turrets: Img[] // the battleship's rotating deck turret, by kingdom colour
   ranks: Img[] // rank insignia by rank (index 0, no rank, is an empty placeholder)
   tileset: HTMLImageElement
   water: HTMLImageElement
@@ -100,7 +101,7 @@ export async function loadAssets(): Promise<Assets> {
   }))
   const dirs: BoatDir[] = ['up', 'down', 'left', 'right']
   const shipBase = async (kind: BoatKind | 'bargeopen') => Object.fromEntries(await Promise.all(dirs.map(async d => [d, await loadImage(`${SHIPS}${kind}_${d}.png?v=${ART_V}`)] as const))) as Record<BoatDir, Img>
-  const [shipBoat, shipZum, shipCargo, shipGun, shipBarge, shipBargeOpen, exp1, exp2, splash, fire, dust1, dust2] = await Promise.all([shipBase('boat'), shipBase('zumwalt'), shipBase('cargo'), shipBase('gunship'), shipBase('barge'), shipBase('bargeopen'), L('Particle FX/Explosion_01.png'), L('Particle FX/Explosion_02.png'), L('Particle FX/Water Splash.png'), L('Particle FX/Fire_03.png'), L('Particle FX/Dust_01.png'), L('Particle FX/Dust_02.png')])
+  const [shipBoat, shipZum, shipCargo, shipGun, shipBarge, shipBargeOpen, shipBattle, turretImg, exp1, exp2, splash, fire, dust1, dust2] = await Promise.all([shipBase('boat'), shipBase('zumwalt'), shipBase('cargo'), shipBase('gunship'), shipBase('barge'), shipBase('bargeopen'), shipBase('battleship'), loadImage(`${SHIPS}battleship_turret.png?v=${ART_V}`), L('Particle FX/Explosion_01.png'), L('Particle FX/Explosion_02.png'), L('Particle FX/Water Splash.png'), L('Particle FX/Fire_03.png'), L('Particle FX/Dust_01.png'), L('Particle FX/Dust_02.png')])
   const [goldStones, sheepIdle, sheepMove, meat, pillar, statue, crate, yard] = await Promise.all([
     Promise.all([1, 2, 3, 4, 5, 6].map(i => L(`Terrain/Resources/Gold/Gold Stones/Gold Stone ${i}.png`))),
     L('Terrain/Resources/Meat/Sheep/Sheep_Idle.png'), L('Terrain/Resources/Meat/Sheep/Sheep_Move.png'), L('Terrain/Resources/Meat/Meat Resource/Meat Resource.png'),
@@ -130,7 +131,8 @@ export async function loadAssets(): Promise<Assets> {
     houses: buildings(houses), monasteries: buildings(monasteries), lots: buildings(lots), barracks: buildings(barracks), towers: buildings(towers), arrow,
     archer: strips(archer), lancer: strips(lancer), warrior: strips(warrior), pawn: strips(pawn),
     knight: PALETTE.map(c => { const sp = shipSpec(c), tint = (im: Img) => (sp ? recolorImage(im, sp, isShipTeam) : im); return { Run: sheet(tint(knightRun), 192), Idle: sheet(tint(knightIdle), 192), Attack: sheet(tint(knightAttack), 192) } }),
-    ships: { boat: ships(shipBoat), zumwalt: ships(shipZum, WIDE_HULL), cargo: ships(shipCargo), gunship: ships(shipGun), barge: ships(shipBarge, WIDE_HULL) },
+    ships: { boat: ships(shipBoat), zumwalt: ships(shipZum, WIDE_HULL), cargo: ships(shipCargo), gunship: ships(shipGun), barge: ships(shipBarge, WIDE_HULL), battleship: ships(shipBattle, WIDE_HULL) },
+    turrets: PALETTE.map(c => { const sp = shipSpec(c); return sp ? recolorImage(turretImg, sp, isShipTeam, WIDE_HULL) : turretImg }), // (the battleship's deck turret, in each kingdom's colour)
     bargeOpen: ships(shipBargeOpen, WIDE_HULL),
     gold: goldStones, sheep: { idle: sheet(sheepIdle, 128), move: sheet(sheepMove, 128) }, meat, props: { pillar, statue, crate, yard }, fx: { explosion: sheet(exp1, 192), explosion2: sheet(exp2, 192), splash: sheet(splash, 192), fire: sheet(fire, 64), dust1: sheet(dust1, 64), dust2: sheet(dust2, 64), wake1: sheet(tinted(dust1, WATER_WASH), 64), wake2: sheet(tinted(dust2, WATER_WASH), 64), wakeSplash: sheet(tinted(splash, WATER_WASH), 192) },
     ui: Object.fromEntries(uiEntries),

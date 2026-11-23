@@ -24,8 +24,8 @@ describe('building ships', () => {
     expect(g.boats[0].docked).toBe(true)                                           // built beside the shore, it starts moored
   })
   it('a Zumwalt costs 300 wood and carries 8 units; construction can be cancelled for a refund', () => {
-    const g = mk()
-    g.towns[0].level = 2 // (a Zumwalt needs an upgraded town)
+    const g = mk({ towns: [[0, 20, 20], [0, 20, 24], [0, 20, 16], [1, 80, 20]] }) // (three towns: the smallest fleet allowance, one Zumwalt)
+    for (const t of g.towns) if (t.owner === 0) t.level = 2 // (a Zumwalt needs an upgraded town)
     g.kingdoms[0].lumber = 400
     const site = g.placeBoat(0, 'zumwalt', px(31), px(20))!
     expect(ZUMWALT.cost).toBe(300)

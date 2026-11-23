@@ -25,7 +25,7 @@ export function ReelView({ reel, title, onClose, onSwitch }: { reel: Reel; title
     if (!assets) { setErr('The art is not loaded yet'); return }
     if (!reel.frames.length) { setErr('Nothing has been recorded yet: the first moment is captured after a second of play.'); return }
     const p = reel.params
-    const g = Game.fromSeed(p.seed, p.kingdoms ?? 0, p.playerTowns, { archipelago: true, playerColor: p.color, startLumber: p.lumber, dynamic: p.dynamic })
+    const g = Game.fromSeed(p.seed, p.kingdoms ?? 0, p.playerTowns, { archipelago: true, playerColor: p.color, startLumber: p.lumber, dynamic: p.dynamic, playAs: p.playAs })
     g.rec.disabled = true
     const player = new ReelPlayer(g, reel, (gg, k, kind, x, y) => spawnBoat(gg, k, kind, x, y))
     const renderer = new Renderer(assets, g)

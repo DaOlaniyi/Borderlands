@@ -51,7 +51,7 @@ export function captureReel(g: Game, reel: Reel) {
   for (const x of g.boats) {
     if (x.hp <= 0) continue
     const tg = x.target
-    const firing = (x.kind === 'zumwalt' || x.kind === 'gunship') && !!tg && (x.shotsLeft > 0 || x.gunCd > 0 || x.volleyCd > 0) && !x.docked
+    const firing = (x.kind === 'zumwalt' || x.kind === 'battleship' || x.kind === 'gunship') && !!tg && (x.shotsLeft > 0 || x.gunCd > 0 || x.volleyCd > 0) && !x.docked
     const t = tg ? (tg.kind === 'boat' ? g.boatById(tg.id) : tg.kind === 'tower' ? g.towerById(tg.id) : tg.kind === 'unit' ? g.unitById(tg.id) : tg.kind === 'town' ? g.towns[tg.id] : { x: tg.x, y: tg.y }) : null
     b.push(x.id, Math.round(x.x), Math.round(x.y), Math.max(0, BOAT_KINDS.indexOf(x.kind)) | (x.faction << 3) | (DIRS.indexOf(x.dir) << 9) | ((x.docked ? 1 : 0) << 11) | ((x.open ? 1 : 0) << 12) | ((x.flip ? 1 : 0) << 13) | (((x.fireT ?? 0) > 0 ? 1 : 0) << 14) | ((firing ? 1 : 0) << 15), Math.round(x.hp), Math.round(x.maxHp), x.cargo.length, t && firing ? Math.round((t as { x: number }).x) : 0, t && firing ? Math.round((t as { y: number }).y) : 0)
   }

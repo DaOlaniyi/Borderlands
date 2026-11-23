@@ -11,6 +11,7 @@ import { packReel, unpackReel } from '../game/Reel'
 import { Renderer } from '../game/Renderer'
 import { restoreGame, serializeGame, serializeRecording } from '../game/SaveLoad'
 import { DebugPanel } from './DebugPanel'
+import { KingdomCard } from './KingdomCard'
 import { Hud, type HudActions } from './Hud'
 import type { NewGameParams } from './NewGameScreen'
 import { SavesDialog } from './SavesDialog'
@@ -49,11 +50,12 @@ function demoShips(game: Game, cam: Camera, view: { w: number; h: number }) {
   }
 }
 
-export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; params: NewGameParams; onExit: () => void; onLoad: (id: string) => void }) {
+export function GameView({ assets, params, onExit, onLoad, onRestart }: { assets: Assets; params: NewGameParams; onExit: () => void; onLoad: (id: string) => void; onRestart: (p: NewGameParams) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const gameRef = useRef<Game | null>(null)
   const camRef = useRef<Camera | null>(null)
   const [game, setGame] = useState<Game | null>(null)
+  const [picked, setPicked] = useState<number | null>(null) // the nation whose tag was clicked (its card is open)
   const [dialog, setDialog] = useState<null | 'saves' | 'debug' | 'replay'>(() => (import.meta.env.DEV && /[?&]panel=debug/.test(location.search) ? 'debug' : null)) // (dev aid: ?panel=debug opens the War Room at once)
   const [paused, setPaused] = useState(false)
   const dialogRef = useRef(dialog)
@@ -66,13 +68,14 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
   const showPerf = useRef(import.meta.env.DEV || /[?&]debug/.test(location.search))
 
   useEffect(() => {
+    setPicked(null)
     const canvas = canvasRef.current!
-    const game = params.save ? restoreGame(params, params.save.json, params.save.recording) : Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, dynamic: params.dynamic, startLumber: params.lumber })
+    const game = params.save ? restoreGame(params, params.save.json, params.save.recording) : Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, dynamic: params.dynamic, playAs: params.playAs, startLumber: params.lumber })
     gameRef.current = game; setGame(game)
     // the literal replay: keyframes every 30 s and a log of the player's commands (a loaded match carries on the film it was saved with)
     const savedFilm = params.save?.film ? (() => { try { return unpackFilm(params.save!.film!) } catch { return null } })() : null
-    game.rec.startFilm({ seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic }, serializeGame, savedFilm)
-    { const rp = { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic } // the position-recording film: a frame every second
+    game.rec.startFilm({ seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic, playAs: params.playAs }, serializeGame, savedFilm)
+    { const rp = { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic, playAs: params.playAs } // the position-recording film: a frame every second
       if (params.save?.reel) void unpackReel(params.save.reel).then(r => game.rec.startReel(game, rp, r), () => game.rec.startReel(game, rp)); else game.rec.startReel(game, rp) }
     const cmd = recordInputs(game) // the player's interface goes through this view of the game, so every command is logged
     if (import.meta.env.DEV && !params.save) { const ff = Number(new URLSearchParams(location.search).get('ff')); for (let i = 0; i < ff * 25; i++) game.step(1 / 25) } // dev aid: ?ff=600 fast-forwards ten minutes
@@ -205,6 +208,7 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
             const txt = document.createElement('span'); el.append(dot, txt)
             el.onpointerenter = () => { game.focusKingdom = k.id; tagBox.dataset.hot = '1' }
             el.onpointerleave = () => { if (game.focusKingdom === k.id) game.focusKingdom = null; tagBox.dataset.hot = '0' }
+            el.onclick = e => { e.stopPropagation(); setPicked(k.id) } // (a click opens the nation's card: army, ships, and a button to play as it)
             tagBox.appendChild(el); rec = { el, txt, x: 0, y: 0 }; tagEls.set(k.id, rec)
           }
           const cx = mine.reduce((n, t) => n + t.x, 0) / mine.length, cy = mine.reduce((n, t) => n + t.y, 0) / mine.length
@@ -266,6 +270,15 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
     return () => { game.speed = prev }
   }, [game, dialog, paused])
 
+  /** Start the match over as nation `k` (as the slot it has in this game): the same world and seed, but the player takes that nation's starting position. */
+  const playAs = (k: number) => {
+    const g = gameRef.current
+    if (!g) return
+    const was = params.playAs ?? 0, orig = k === 0 ? was : k === was ? 0 : k // (this game may itself be a "play as" one: kingdom slots 0 and `was` are swapped relative to the world's own order)
+    if (!window.confirm(`Restart the match as ${g.kingdoms[k].name}?\n\nThe world is the same; you start from where ${g.kingdoms[k].name} started. This match will be lost unless you saved it.`)) return
+    onRestart({ seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic, playAs: orig > 0 ? orig : undefined })
+  }
+
   const saveFromDialog = async (name: string, overwriteId?: string) => {
     if (!gameRef.current || !camRef.current) return
     await saveGame(gameRef.current, camRef.current, params, name, overwriteId ?? `save-${Date.now().toString(36)}`, false)
@@ -275,6 +288,7 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
     <div className="stage">
       <canvas ref={canvasRef} aria-label="Borderlands map" />
       <div ref={tagsRef} className="nation-tags" style={{ display: 'none' }} />
+      {game && picked !== null && <KingdomCard game={game} k={picked} onClose={() => setPicked(null)} onPlayAs={playAs} />}
       {hud && apiRef.current && <Hud hud={hud} perf={perf} actions={apiRef.current} brush={brush} />}
       {game && dialog === 'debug' && <DebugPanel game={game} paused={paused} onPause={setPaused} onClose={() => setDialog(null)} />}
       {game && dialog === 'replay' && <ReplayView data={game.rec.data} film={game.rec.film} filmEndT={game.time} reel={game.rec.reel} title={`${game.kingdoms[0].name} · live game`} onClose={() => setDialog(null)} />}
@@ -287,7 +301,7 @@ export function GameView({ assets, params, onExit, onLoad }: { assets: Assets; p
 async function saveGame(game: Game, cam: Camera, params: NewGameParams, name: string, id: string, auto: boolean) {
   await putSave({
     id, name, auto, savedAt: new Date().toISOString(), cam: { x: cam.x, y: cam.y, zoom: cam.zoom },
-    params: { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic },
+    params: { seed: params.seed, color: params.color, kingdoms: params.kingdoms, playerTowns: params.playerTowns, lumber: params.lumber, dynamic: params.dynamic, playAs: params.playAs },
     gameTime: game.time, kingdomName: game.kingdoms[0].name, towns: game.ownedTowns(0), kingdoms: game.kingdoms.length,
   }, serializeGame(game), serializeRecording(game), game.rec.film ? await packFilm({ ...game.rec.film, endT: game.time }) : undefined, game.rec.reel ? await packReel(game.rec.reel) : undefined)
 }

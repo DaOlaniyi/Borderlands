@@ -32,6 +32,6 @@ export default function App() {
     } catch (e) { window.alert(`Could not load that save: ${(e as Error)?.message ?? e}`) }
   }, [])
   if (error) return <div className="menu"><div className="panel menu-card"><h1>Could not load art</h1><p className="sub">{error}</p></div></div>
-  if (params && assets) return <GameView assets={assets} params={params} onExit={exit} onLoad={load} />
+  if (params && assets) return <GameView assets={assets} params={params} onExit={exit} onLoad={load} onRestart={start} />
   return <NewGameScreen ready={!!assets} onStart={start} onLoad={load} />
 }

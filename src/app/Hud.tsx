@@ -5,7 +5,7 @@ function useOpen(key: string): [boolean, () => void] {
   const [open, set] = useState(() => { try { return localStorage.getItem('bl-' + key) !== '0' } catch { return true } })
   return [open, () => set(o => { const n = !o; try { localStorage.setItem('bl-' + key, n ? '1' : '0') } catch { /* private mode */ } return n })]
 }
-import { BARGE, BOAT, CARGO, GUNSHIP, MEAT, OUTPOST, SETTLE, YARD, TOWN_LEVEL, FACTION_COLORS, HARVEST, HARVEST_MODES, LOT, POP, TOWER, UNIT, UNIT_TYPES, ZUMWALT, ZUM_FOCUS, type BoatKind, type HarvestMode, type ZumFocus } from '../game/config'
+import { BARGE, BATTLESHIP, BOAT, CARGO, GUNSHIP, MEAT, OUTPOST, SETTLE, YARD, TOWN_LEVEL, FACTION_COLORS, HARVEST, HARVEST_MODES, LOT, POP, TOWER, UNIT, UNIT_TYPES, ZUMWALT, ZUM_FOCUS, type BoatKind, type HarvestMode, type ZumFocus } from '../game/config'
 import type { HudSnapshot } from '../game/Game'
 import { ART_V } from '../game/artVersion'
 import type { Relation } from '../game/types'
@@ -61,7 +61,7 @@ const goldIcon = `${import.meta.env.BASE_URL}assets/icons/gold.png?v=${ART_V}` /
 const meatIcon = `${import.meta.env.BASE_URL}assets/icons/meat.png?v=${ART_V}`
 const propUrl = (n: string) => `${import.meta.env.BASE_URL}assets/props/${n}.png?v=${ART_V}`
 const rankIcon = (key: string) => `${import.meta.env.BASE_URL}assets/ranks/${key}.png?v=${ART_V}`
-const BOAT_LABEL: Record<BoatKind, string> = { boat: 'Infantry boat', zumwalt: 'Zumwalt', cargo: 'Cargo boat', gunship: 'Gunship', barge: 'Barge' }
+const BOAT_LABEL: Record<BoatKind, string> = { boat: 'Infantry boat', zumwalt: 'Zumwalt', cargo: 'Cargo boat', gunship: 'Gunship', barge: 'Barge', battleship: 'Battleship' }
 const REL_LABEL: Record<Relation, string> = { allied: 'Allied', neutral: 'Neutral', conflict: 'In Conflict', war: 'At War', total: 'Total War' }
 
 /** Letters between the AI kingdoms: each shows for about ten seconds (real time) on the left, at most three at once. */
@@ -234,7 +234,10 @@ export function Hud({ hud, perf, actions, brush }: { hud: HudSnapshot; perf: str
           <img className="shipicon" src={shipUrl('barge', me.color, 'right')} alt="" /><span>{hud.placing === 'barge' ? 'Click water…' : 'Barge'}</span><em><img src={icon('Icon_02')} alt="" />{BARGE.cost}</em>
         </button>
         <button className={'shopitem' + (hud.placing === 'zumwalt' ? ' on' : '')} disabled={hud.lumber < ZUMWALT.cost && hud.placing !== 'zumwalt'} onClick={() => actions.placeBoat('zumwalt')} title={`Zumwalt: ${ZUMWALT.cost} lumber. Cannons reach ${ZUMWALT.rangeTiles} tiles (bursts of two, 2.5× a warrior's damage up close, 10% at maximum range). Carries ${ZUMWALT.cap}. Fragile: an archer's HP.`}>
-          <img className="shipicon" src={shipUrl('zumwalt', me.color, 'right')} alt="" /><span>{hud.placing === 'zumwalt' ? 'Click water…' : 'Zumwalt'}</span><em><img src={icon('Icon_02')} alt="" />{ZUMWALT.cost}</em>
+          <img className="shipicon" src={shipUrl('zumwalt', me.color, 'right')} alt="" /><span>{hud.placing === 'zumwalt' ? 'Click water…' : `Zumwalt ${hud.navy.zum}/${hud.navy.zumCap}`}</span><em><img src={icon('Icon_02')} alt="" />{ZUMWALT.cost}</em>
+        </button>
+        <button className={'shopitem' + (hud.placing === 'battleship' ? ' on' : '')} disabled={hud.lumber < BATTLESHIP.cost / BATTLESHIP.stages && hud.placing !== 'battleship'} onClick={() => actions.placeBoat('battleship')} title={`Battleship: ${BATTLESHIP.cost} lumber in ${BATTLESHIP.stages} stages (${BATTLESHIP.cost / BATTLESHIP.stages} each, paid as each is reached; the work waits if the lumber is not there). Three times a Zumwalt's hull, ${Math.round(BATTLESHIP.rangeTiles)}-tile guns (blind inside ${BATTLESHIP.minRangeTiles} tiles), shells 80% as strong but twice as accurate, 70% of a Zumwalt's speed. Two deck turrets, no broadside. Needs a level 2 town and a place in your fleet: ${hud.navy.bs}/${hud.navy.bsCap}.`}>
+          <img className="shipicon" src={shipUrl('battleship', me.color, 'right')} alt="" /><span>{hud.placing === 'battleship' ? 'Click water…' : `Battleship ${hud.navy.bs}/${hud.navy.bsCap}`}</span><em><img src={icon('Icon_02')} alt="" />{BATTLESHIP.cost}</em>
         </button>
         <button className={'shopitem' + (hud.placing === 'cargo' ? ' on' : '')} disabled={hud.lumber < CARGO.cost && hud.placing !== 'cargo'} onClick={() => actions.placeBoat('cargo')} title={`Cargo boat: ${CARGO.cost} lumber. Carries up to ${CARGO.cap.lumber} lumber, ${CARGO.cap.gold} gold and ${CARGO.cap.meat} meat between regions. Sunk by two Zumwalt volleys; its cargo floats until someone scoops it up.`}>
           <img className="shipicon" src={shipUrl('cargo', me.color, 'right')} alt="" /><span>{hud.placing === 'cargo' ? 'Click water…' : 'Cargo boat'}</span><em><img src={icon('Icon_02')} alt="" />{CARGO.cost}</em>

@@ -2,10 +2,10 @@ import { UNIT_TYPES, type BoatKind, type UnitType } from './config'
 import type { Game } from './Game'
 
 /** Match analytics: counters and time series for the review page. Plain data only (it is saved with the game). */
-export const BOAT_KINDS: BoatKind[] = ['boat', 'barge', 'cargo', 'gunship', 'zumwalt']
+export const BOAT_KINDS: BoatKind[] = ['boat', 'barge', 'cargo', 'gunship', 'zumwalt', 'battleship']
 export type Res3 = 'lumber' | 'gold' | 'meat'
 export type SpendCat = 'tower' | 'lot' | Exclude<BoatKind, 'barge'> | 'settlement' | 'upgrade' // (barges are booked with the infantry boats)
-export const SPEND_CATS: SpendCat[] = ['tower', 'lot', 'boat', 'cargo', 'gunship', 'zumwalt', 'settlement', 'upgrade']
+export const SPEND_CATS: SpendCat[] = ['tower', 'lot', 'boat', 'cargo', 'gunship', 'zumwalt', 'battleship', 'settlement', 'upgrade']
 
 export type ShipStats = { started: number; built: number; lost: number; sunk: number; siteLost: number }
 export type NavalTries = { tries: number; fails: number; lastFailAt: number }
@@ -58,6 +58,7 @@ const newK = (): KStats => ({
 /** A saved game from before a ship type existed has no counters for it: add them (and the other new fields) so the review page never meets a hole. */
 export function ensureStats(s: GameStats) {
   for (const k of s.k) for (const kind of BOAT_KINDS) { k.ships[kind] ??= { started: 0, built: 0, lost: 0, sunk: 0, siteLost: 0 }; k.placement[kind] ??= { tries: 0, fails: 0, lastFailAt: -1 } }
+  for (const k of s.k) for (const c of SPEND_CATS) k.spentLumber[c] ??= 0 // (saves from before the battleship have no ledger line for it)
   for (const k of s.k) for (const t of UNIT_TYPES) { k.trained[t] ??= 0; k.killed[t] ??= 0; k.lost[t] ??= 0 }
   s.felled ??= 0; s.regrown ??= 0
 }

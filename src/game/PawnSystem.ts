@@ -93,7 +93,7 @@ function planReturn(g: Game, p: Pawn): boolean {
 function findSite(g: Game, p: Pawn): Tower | null {
   let best: Tower | null = null, bd = Infinity
   for (const t of g.towers) {
-    if (t.built || t.faction !== p.faction) continue
+    if (t.built || t.faction !== p.faction || t.stalled) continue // (a battleship waiting for its next instalment is left alone)
     if (t.builder >= 0 && t.builder !== p.id && g.pawnById(t.builder)?.site === t.id) continue
     if (!siteOwned(g, t)) continue
     const d = Math.hypot(t.x - p.x, t.y - p.y)

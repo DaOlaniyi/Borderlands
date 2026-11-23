@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, useState, type ReactNode } from 'react'
-import { BARGE, BOAT, CARGO, FACTION_COLORS, GUNSHIP, UNIT, UNIT_TYPES, ZUMWALT, type BoatKind, type UnitType } from '../game/config'
+import { BARGE, BATTLESHIP, BOAT, CARGO, FACTION_COLORS, GUNSHIP, UNIT, UNIT_TYPES, ZUMWALT, type BoatKind, type UnitType } from '../game/config'
 import { debugSnapshot, type KDebug } from '../game/DebugInfo'
 import type { Game } from '../game/Game'
 import { BOAT_KINDS, SPEND_CATS, type KStats, type SeriesKey, type SpendCat, type StatEvent } from '../game/Stats'
@@ -9,13 +9,13 @@ import { emblemUrl } from './ui'
 type Tab = 'overview' | 'economy' | 'military' | 'navy' | 'ai' | 'timeline'
 const TABS: [Tab, string][] = [['overview', 'Overview'], ['economy', 'Economy'], ['military', 'Military'], ['navy', 'Navy'], ['ai', 'AI & Diplomacy'], ['timeline', 'Timeline']]
 
-const SHIP_LABEL: Record<BoatKind, string> = { boat: 'Infantry boat', barge: 'Barge', cargo: 'Cargo boat', gunship: 'Gunship', zumwalt: 'Zumwalt' }
-const SHIP_COST: Record<BoatKind, number> = { boat: BOAT.cost, barge: BARGE.cost, cargo: CARGO.cost, gunship: GUNSHIP.cost, zumwalt: ZUMWALT.cost }
+const SHIP_LABEL: Record<BoatKind, string> = { boat: 'Infantry boat', barge: 'Barge', cargo: 'Cargo boat', gunship: 'Gunship', zumwalt: 'Zumwalt', battleship: 'Battleship' }
+const SHIP_COST: Record<BoatKind, number> = { boat: BOAT.cost, barge: BARGE.cost, cargo: CARGO.cost, gunship: GUNSHIP.cost, zumwalt: ZUMWALT.cost, battleship: BATTLESHIP.cost }
 /** Eight categorical slots (light surface), in fixed order: a spending category or ship kind keeps its colour everywhere. */
-const CAT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948']
+const CAT = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948', '#7a5230']
 const SPEND_COLOR = Object.fromEntries(SPEND_CATS.map((c, i) => [c, CAT[i]])) as Record<SpendCat, string>
-const SPEND_LABEL: Record<SpendCat, string> = { tower: 'Towers', lot: 'Lots', boat: 'Troop ships (boats and barges)', cargo: 'Cargo boats', gunship: 'Gunships', zumwalt: 'Zumwalts', settlement: 'Settlements', upgrade: 'Upgrades' }
-const SHIP_COLOR: Record<BoatKind, string> = { boat: CAT[0], barge: CAT[4], cargo: CAT[2], gunship: CAT[3], zumwalt: CAT[1] }
+const SPEND_LABEL: Record<SpendCat, string> = { tower: 'Towers', lot: 'Lots', boat: 'Troop ships (boats and barges)', cargo: 'Cargo boats', gunship: 'Gunships', zumwalt: 'Zumwalts', battleship: 'Battleships', settlement: 'Settlements', upgrade: 'Upgrades' }
+const SHIP_COLOR: Record<BoatKind, string> = { boat: CAT[0], barge: CAT[4], cargo: CAT[2], gunship: CAT[3], zumwalt: CAT[1], battleship: CAT[8] }
 const UNIT_COLOR: Record<UnitType, string> = { warrior: CAT[0], archer: CAT[2], lancer: CAT[1], knight: CAT[3] }
 
 const METRICS: { key: SeriesKey | 'income'; label: string; unit?: string }[] = [

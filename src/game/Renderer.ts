@@ -9,7 +9,7 @@ import type { Game } from './Game'
 import { hash2 } from './rng'
 import { holdFrame, loopFrame } from './SpriteAnimator'
 import { forEachBorderEdge } from './TerritorySystem'
-import { BOAT, CARGO, DOCK, GOLD, GUNSHIP, MEAT, OUTPOST, SETTLE, ZUMWALT, goldTier, shipLength, type BoatKind } from './config'
+import { BATTLESHIP, BOAT, CARGO, DOCK, GOLD, GUNSHIP, MEAT, OUTPOST, SETTLE, ZUMWALT, goldTier, isCapitalKind, shipLength, type BoatKind } from './config'
 import { dockTimeOf, SINK_SECONDS } from './BoatSystem'
 import bargeOffsets from './bargeOffsets.json'
 import { isShipKind } from './Game'
@@ -187,6 +187,8 @@ export class Renderer {
       for (let y = gy0; y <= gy1; y++) { ctx.moveTo(gx0 * TILE, y * TILE); ctx.lineTo(gx1 * TILE, y * TILE) }
       ctx.stroke() }
 
+    this.drawScorch(ctx, vx0, vy0, vx1, vy1)
+
     // 6–8. props, towns, towers and units, depth sorted by ground-contact y
     this.sway = cam.zoom >= SWAY_ZOOM // vegetation is static unless the camera is close
     this.collect(vx0 - 160, vy0 - 220, vx1 + 160, vy1 + 280, alpha)
@@ -214,6 +216,7 @@ export class Renderer {
     this.drawCrates(ctx)
     this.drawProjectiles(ctx)
     this.drawShells(ctx)
+    this.drawFlames(ctx, time, vx0, vy0, vx1, vy1)
     this.drawFx(ctx)
 
     // 9. selection, routes, indicators
@@ -538,11 +541,16 @@ export class Renderer {
   }
   /** Towers and lots. A garrisoned archer stands at full size on the middle of the tower's platform. */
   private drawTower(ctx: CanvasRenderingContext2D, t: Tower, time: number) {
-    if (t.kind === 'boat' || t.kind === 'zumwalt' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'barge') { // a ship under construction: translucent hull on the slipway with a progress bar
+    if (t.kind === 'boat' || t.kind === 'zumwalt' || t.kind === 'battleship' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'barge') { // a ship under construction: translucent hull on the slipway with a progress bar
       const color = this.game.kingdoms[t.faction].color, vertical = !t.shore || Math.abs(t.shore.x - t.x) > Math.abs(t.shore.y - t.y)
       const img = this.shipImg(t.kind, color, vertical ? 'up' : 'right'), total = this.game.buildTimeOf(t)
       ctx.globalAlpha = 0.35 + 0.4 * (t.progress / total); ctx.drawImage(img, t.x - img.width / 2, t.y - img.height / 2); ctx.globalAlpha = 1
       this.bar(ctx, t.x, t.y - img.height / 2 - 8, 48, t.progress / total, '#f0cf6a')
+      if (t.kind === 'battleship') { // built in three stages: which one it is on, and when it is waiting for lumber
+        const stage = Math.min(BATTLESHIP.stages, Math.floor(t.progress / (total / BATTLESHIP.stages)) + 1), txt = t.stalled ? `Stage ${stage}/${BATTLESHIP.stages}: needs ${BATTLESHIP.cost / BATTLESHIP.stages} lumber` : `Stage ${stage}/${BATTLESHIP.stages}`
+        ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center'; const w = ctx.measureText(txt).width + 10
+        ctx.fillStyle = 'rgba(12,16,22,.85)'; ctx.fillRect(t.x - w / 2, t.y - img.height / 2 - 30, w, 15); ctx.fillStyle = t.stalled ? '#ffb27a' : '#f0cf6a'; ctx.fillText(txt, t.x, t.y - img.height / 2 - 19)
+      }
       return
     }
     const color = this.game.kingdoms[t.faction].color, img = t.kind === 'tower' ? this.assets.towers[color] : this.assets.lots[color]
@@ -582,6 +590,7 @@ export class Renderer {
       ctx.drawImage(o, x - img.width / 2 - off[0], y - img.height / 2 - off[1])
     } else if (b.flip) { ctx.save(); ctx.translate(x, y); ctx.scale(1, -1); ctx.drawImage(img, -img.width / 2, -img.height / 2); ctx.restore() } else ctx.drawImage(img, x - img.width / 2, y - img.height / 2)
     ctx.filter = 'none'
+    if (b.kind === 'battleship' && (b.dir === 'up' || b.dir === 'down')) this.drawTurrets(ctx, b, x, y, color) // (from the side the turrets are part of the picture; from above they swing round to the target)
     if ((b.fireT ?? 0) > 0) this.drawShipFire(ctx, b, x, y, img, time)
     const sel = g.selection?.kind === 'boats' && g.selection.ids.includes(b.id)
     const top = y - img.height / 2 - 10
@@ -594,7 +603,7 @@ export class Renderer {
       if (pct >= 0 && b.faction === 0) { ctx.fillStyle = 'rgba(12,16,22,.9)'; ctx.fillRect(x - 21, top - 26, 42, 15); ctx.fillStyle = pct >= 100 ? '#8be28b' : '#ffd86a'; ctx.font = 'bold 11px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`${pct}%`, x, top - 14) }
       else if (tot > 0 && b.faction === 0) { ctx.fillStyle = 'rgba(12,16,22,.85)'; ctx.fillRect(x - 26, top + 8, 52, 13); ctx.fillStyle = '#ffd86a'; ctx.font = 'bold 10px system-ui'; ctx.textAlign = 'center'; ctx.fillText(`${Math.round(b.load.lumber)}L ${Math.round(b.load.gold)}G ${Math.round(b.load.meat)}M`, x, top + 18) }
     }
-    if (b.kind === 'zumwalt' && b.lockT > 0 && b.target) { ctx.strokeStyle = '#ff8a6a'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(x, fy, boatLength(b.kind) * 0.5 + 14, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - b.lockT / ZUMWALT.lockSeconds)); ctx.stroke() } // locking on
+    if (isCapitalKind(b.kind) && b.lockT > 0 && b.target) { ctx.strokeStyle = '#ff8a6a'; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(x, fy, boatLength(b.kind) * 0.5 + 14, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * (1 - b.lockT / ZUMWALT.lockSeconds)); ctx.stroke() } // locking on
     if (b.docking && !b.docked) { // lying beside the coast, waiting to moor: a ring fills over DOCK seconds (red while defenders hold the beach)
       const p = Math.min(1, b.dockT / dockTimeOf(b)), rad = boatLength(b.kind) * 0.5 + 8
       ctx.strokeStyle = 'rgba(255,255,255,.25)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(x, fy, rad, 0, Math.PI * 2); ctx.stroke()
@@ -602,6 +611,19 @@ export class Renderer {
     }
     if (b.docked) { ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 2; ctx.setLineDash([4, 6]); ctx.beginPath(); ctx.arc(x, fy, boatLength(b.kind) * 0.5 + 6, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]) }
     if (sel) { ctx.strokeStyle = '#fff3a9'; ctx.lineWidth = 3; ctx.beginPath(); if (standing) ctx.ellipse(x, fy, img.width / 2 + 8, img.height / 2 + 6, 0, 0, Math.PI * 2); else ctx.ellipse(x, fy, img.width / 2 + 6, img.height * 0.3 + 8, 0, 0, Math.PI * 2); ctx.stroke() }
+  }
+
+  /** A battleship seen from above: its two triple-barrel deck turrets, each turned to where it is aiming. */
+  private drawTurrets(ctx: CanvasRenderingContext2D, b: Boat, x: number, y: number, color: number) {
+    const img = this.assets.turrets[color]
+    if (!img) return
+    for (let i = 0; i < 2; i++) {
+      const ang = b.tAng?.[i] ?? (i === 0 ? -Math.PI / 2 : Math.PI / 2), off = BATTLESHIP.turrets[b.dir][i]
+      ctx.save(); ctx.translate(x, y + off); ctx.rotate(ang + Math.PI / 2) // (the sprite's barrels point up)
+      ctx.shadowColor = 'rgba(0,0,0,.35)'; ctx.shadowBlur = 4
+      ctx.drawImage(img, -img.width / 2, -img.height * 0.62)
+      ctx.restore()
+    }
   }
 
   private wakes = new Map<number, Wake>()
@@ -618,7 +640,7 @@ export class Renderer {
       w = { lx: x, ly: fy, lt: time, hx: 0, hy: 1, acc: 0, n: 0, pts: [], puffs: [] }; this.wakes.set(b.id, w)
     }
     const K = 0.5 // (the whole wake is kept faint: it should read as disturbed water, not as an overlay)
-    const big = b.kind === 'zumwalt', vertical = b.dir === 'up' || b.dir === 'down'
+    const big = isCapitalKind(b.kind), vertical = b.dir === 'up' || b.dir === 'down'
     const len = vertical ? img.height : img.width, beam = vertical ? img.width : img.height
     const life = big ? 2.8 : 1.8, scale = big ? 1.5 : b.kind === 'gunship' ? 0.95 : b.kind === 'cargo' ? 0.8 : b.kind === 'barge' ? 1.15 : 1
     const dt = time - w.lt, moved = Math.hypot(x - w.lx, fy - w.ly)
@@ -789,6 +811,33 @@ export class Renderer {
       ctx.fillStyle = 'rgba(255,220,140,.8)'; ctx.beginPath(); ctx.arc(x - 2, y - 2, 2.5, 0, Math.PI * 2); ctx.fill()
     }
   }
+  /** Burnt ground under the fires (drawn before anything stands on it): a dark patch that grows in and fades slowly after the flames die. */
+  private drawScorch(ctx: CanvasRenderingContext2D, vx0: number, vy0: number, vx1: number, vy1: number) {
+    const g = this.game
+    if (!g.flames.length) return
+    for (const f of g.flames) {
+      if (f.x < vx0 - 80 || f.x > vx1 + 80 || f.y < vy0 - 80 || f.y > vy1 + 80) continue
+      const age = g.time - f.born, a = Math.min(1, age / 2.5) * Math.min(1, (f.life - age) / 6 + 0.35)
+      const rx = 46 * f.size, gr = ctx.createRadialGradient(f.x, f.y + 14, 2, f.x, f.y + 14, rx) // (a soft, feathered burn)
+      gr.addColorStop(0, `rgba(22,14,8,${(0.4 * a).toFixed(3)})`); gr.addColorStop(0.65, `rgba(22,14,8,${(0.22 * a).toFixed(3)})`); gr.addColorStop(1, 'rgba(22,14,8,0)')
+      ctx.fillStyle = gr; ctx.save(); ctx.translate(f.x, f.y + 14); ctx.scale(1, 0.6); ctx.translate(-f.x, -(f.y + 14)); ctx.beginPath(); ctx.arc(f.x, f.y + 14, rx, 0, Math.PI * 2); ctx.fill(); ctx.restore()
+    }
+  }
+  /** The flames themselves: the pack's fire sprites looping out of step, each fading in as the grass catches and out as it dies; bigger fires in a heavier bombardment. */
+  private drawFlames(ctx: CanvasRenderingContext2D, time: number, vx0: number, vy0: number, vx1: number, vy1: number) {
+    const g = this.game, sh = this.assets.fx.fire
+    if (!g.flames.length) return
+    for (const f of g.flames) {
+      if (f.x < vx0 - 100 || f.x > vx1 + 100 || f.y < vy0 - 120 || f.y > vy1 + 100) continue
+      const age = g.time - f.born, a = Math.min(1, age / 1.2) * Math.min(1, (f.life - age) / 3)
+      if (a <= 0) continue
+      const size = 74 * f.size, ph = f.seed * 0.013
+      ctx.globalAlpha = 0.85 * a
+      drawSheet(ctx, sh, loopFrame(time, 9, sh.frames, ph), f.x - size / 2, f.y - size * 0.88, size, size)
+      if (f.size > 1.2) drawSheet(ctx, sh, loopFrame(time, 9, sh.frames, ph + 0.37), f.x - size * 0.3, f.y - size * 1.05, size * 0.7, size * 0.7) // (a heavy bombardment: a second, taller tongue)
+    }
+    ctx.globalAlpha = 1
+  }
   /** Hit sparks, capture / explosion rings. */
   private drawFx(ctx: CanvasRenderingContext2D) {
     for (const f of this.game.fx) {
@@ -872,7 +921,7 @@ export class Renderer {
     for (const id of selBoats) {
       const b = g.boatById(id)
       if (!b || !b.strike) continue
-      const range = (b.kind === 'zumwalt' ? ZUMWALT.rangeTiles : GUNSHIP.rangeTiles) * TILE, inRange = Math.hypot(b.strike.x - b.x, b.strike.y - b.y) <= range
+      const range = (b.kind === 'battleship' ? BATTLESHIP.rangeTiles : b.kind === 'zumwalt' ? ZUMWALT.rangeTiles : GUNSHIP.rangeTiles) * TILE, inRange = Math.hypot(b.strike.x - b.x, b.strike.y - b.y) <= range
       const tg = b.strike.kind === 'ground' ? b.strike : { x: b.strike.x, y: b.strike.y }
       ctx.strokeStyle = inRange ? '#ff3b30' : '#9aa0a8'; ctx.lineWidth = 5; ctx.lineCap = 'round'
       ctx.beginPath(); ctx.moveTo(tg.x - 16, tg.y - 16); ctx.lineTo(tg.x + 16, tg.y + 16); ctx.moveTo(tg.x + 16, tg.y - 16); ctx.lineTo(tg.x - 16, tg.y + 16); ctx.stroke()

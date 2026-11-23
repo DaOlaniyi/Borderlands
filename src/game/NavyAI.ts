@@ -1,12 +1,12 @@
 import { aiNote } from './Stats'
 import { navalBudget, yardBerth } from './Yards'
 import { evading, hostileShoreNear, SHORE_STANDOFF, isWaterCell, mooringNear, orderSail, setStrikeOn, towerShadow } from './BoatSystem'
-import { GUNSHIP, TILE, ZUMWALT } from './config'
+import { GUNSHIP, TILE, ZUMWALT, isCapitalKind } from './config'
 import type { Game } from './Game'
 import type { Boat, Town } from './types'
 
 const tiles = (a: { x: number; y: number }, b: { x: number; y: number }) => Math.hypot(a.x - b.x, a.y - b.y) / TILE
-const isArmedBoat = (b: Boat) => b.kind === 'zumwalt' || b.kind === 'gunship'
+const isArmedBoat = (b: Boat) => isCapitalKind(b.kind) || b.kind === 'gunship'
 
 /** How far from a target a ship stands to shoot (tiles): close enough to hit hard, outside a tower's 12-tile reach is impossible for a Zumwalt, so it simply tanks it. */
 const STAND = { zumwaltShip: 13, zumwaltBuilding: 9, gunship: 8 }
@@ -25,7 +25,7 @@ const HUNT_TILES = 55
  */
 export function escortNeed(g: Game, k: number, x: number, y: number, hpFrac = 1): number {
   let gun = 0, zum = 0
-  for (const e of g.boats) if (e.hp > 0 && g.hostile(k, e.faction) && Math.hypot(e.x - x, e.y - y) < 28 * TILE) { if (e.kind === 'gunship') gun++; else if (e.kind === 'zumwalt') zum++ }
+  for (const e of g.boats) if (e.hp > 0 && g.hostile(k, e.faction) && Math.hypot(e.x - x, e.y - y) < 28 * TILE) { if (e.kind === 'gunship') gun++; else if (isCapitalKind(e.kind)) zum++ }
   let need = zum > 0 || gun >= 3 ? 3 : gun === 2 ? 2 : gun === 1 ? (hpFrac < 0.6 ? 1 : 0) : 0
   if (need < 1 && towerShadow(g, k, x, y, 14 * TILE)) need = 1
   if (hpFrac < 0.5) need = Math.min(3, need + 1)
@@ -45,7 +45,7 @@ export function navalPicture(g: Game, k: number, target: Town) {
   const ships = g.boats.filter(b => b.hp > 0 && g.hostile(k, b.faction) && isArmedBoat(b) && tiles(b, target) < 40)
   const others = g.boats.filter(b => b.hp > 0 && g.hostile(k, b.faction) && !isArmedBoat(b) && tiles(b, target) < 28)
   const towers = g.towers.filter(t => t.built && t.kind === 'tower' && g.hostile(k, t.faction) && tiles(t, target) < 15)
-  const sites = g.towers.filter(t => !t.built && g.hostile(k, t.faction) && (t.kind === 'boat' || t.kind === 'zumwalt' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'barge') && tiles(t, target) < 28)
+  const sites = g.towers.filter(t => !t.built && g.hostile(k, t.faction) && (t.kind === 'boat' || isCapitalKind(t.kind) || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'barge') && tiles(t, target) < 28)
   return { ships, others, towers, sites }
 }
 
@@ -87,7 +87,7 @@ function stationNear(g: Game, z: Boat, target: Town, mates: Boat[]): { x: number
  * nearest `from` (and, when a Zumwalt is on the job, near it so the fleet stays together).
  */
 export function stagingPoint(g: Game, k: number, target: Town, from: { x: number; y: number }): { x: number; y: number } | null {
-  const lead = g.boats.find(b => b.faction === k && b.kind === 'zumwalt' && b.hp > 0 && tiles(b, target) < 45)
+  const lead = g.boats.find(b => b.faction === k && isCapitalKind(b.kind) && b.hp > 0 && tiles(b, target) < 45)
   const ref = lead ?? from
   let best: { x: number; y: number } | null = null, bd = Infinity
   for (let a = 0; a < 32; a++) {
@@ -138,7 +138,7 @@ const headingOf = (z: Boat, towards: { x: number; y: number } | null) => {
  * A Zumwalt does not leave on an assault without at least two gunships alongside, and waits for slower escorts to catch up.
  */
 export function manageNavalForces(g: Game, k: number, target: Town | null, home: Town[]) {
-  const zums = g.boats.filter(b => b.faction === k && b.kind === 'zumwalt' && b.hp > 0)
+  const zums = g.boats.filter(b => b.faction === k && isCapitalKind(b.kind) && b.hp > 0)
   const guns = g.boats.filter(b => b.faction === k && b.kind === 'gunship' && b.hp > 0)
   const homeThreats = navalThreats(g, k, home) // (known even to a nation with no ships: it will build some)
   if (homeThreats.length) g.navalThreat.add(k); else g.navalThreat.delete(k)
@@ -159,7 +159,7 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     if (z) gb.escortOf = z.id
   }
 
-  for (const b of [...zums, ...guns]) b.noDock = !(b.kind === 'zumwalt' && M.get(b.id)?.phase === 'return') // AI warships stay afloat (no accidental mooring), except a Zumwalt going to be mended
+  for (const b of [...zums, ...guns]) b.noDock = !(isCapitalKind(b.kind) && M.get(b.id)?.phase === 'return') // AI warships stay afloat (no accidental mooring), except a Zumwalt going to be mended
   // ---- a Zumwalt that is burning (badly hurt) with no mission on goes to a shipyard berth to be mended, and goes back to station once whole ----
   for (const z of zums) {
     let s = M.get(z.id)
@@ -187,10 +187,10 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
   if (threats.length) {
     // answer whoever is shooting at our ships first (an enemy within reach of any of them), then the nearest threat to the fleet
     const closeToOurs = (e: Boat) => [...zums, ...guns].reduce((m, s) => Math.min(m, tiles(s, e)), Infinity)
-    engaged = threats.slice().sort((a, b) => (closeToOurs(a) < 14 ? 0 : 1) - (closeToOurs(b) < 14 ? 0 : 1) || (b.kind === 'zumwalt' ? 1 : 0) - (a.kind === 'zumwalt' ? 1 : 0) || tiles(a, lead) - tiles(b, lead))[0]
+    engaged = threats.slice().sort((a, b) => (closeToOurs(a) < 14 ? 0 : 1) - (closeToOurs(b) < 14 ? 0 : 1) || (isCapitalKind(b.kind) ? 1 : 0) - (isCapitalKind(a.kind) ? 1 : 0) || tiles(a, lead) - tiles(b, lead))[0]
     for (const b of [...zums, ...guns]) { // each ship takes the attacker nearest to IT when one is on top of it
       const mine = threats.filter(e => tiles(e, b) < 12).sort((p, q) => tiles(p, b) - tiles(q, b))[0] ?? engaged
-      if (b.kind === 'zumwalt' && !okAt(b, mine.x, mine.y) && tiles(mine, b) > 14) continue // (it does not charge ahead of its squad into a real fight; a weak raider needs no squad)
+      if (isCapitalKind(b.kind) && !okAt(b, mine.x, mine.y) && tiles(mine, b) > 14) continue // (it does not charge ahead of its squad into a real fight; a weak raider needs no squad)
       if (!b.strike || b.strike.kind !== 'boat' || !g.boatById(b.strike.id) || (mine.id !== b.strike.id && tiles(mine, b) < 8 && tiles(b, { x: b.strike.x, y: b.strike.y }) > 12)) setStrikeOn(b, 'boat', mine.id, mine.x, mine.y)
     }
   }
@@ -285,7 +285,7 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     let wave = g.navalWave.get(k)
     if (wave && (!g.boatById(wave.target) || g.time - wave.since > 150)) { g.navalWave.delete(k); wave = undefined }
     if (!wave && spare.length >= 3) {
-      const prey = g.boats.filter(e => e.hp > 0 && e.kind === 'zumwalt' && g.hostile(k, e.faction) && (home.some(t => tiles(t, e) < 50) || spare.some(gb => tiles(gb, e) < 40))).sort((p, q) => tiles(p, spare[0]) - tiles(q, spare[0]))[0]
+      const prey = g.boats.filter(e => e.hp > 0 && isCapitalKind(e.kind) && g.hostile(k, e.faction) && (home.some(t => tiles(t, e) < 50) || spare.some(gb => tiles(gb, e) < 40))).sort((p, q) => tiles(p, spare[0]) - tiles(q, spare[0]))[0]
       if (prey) { wave = { target: prey.id, since: g.time, launched: false, ids: spare.slice(0, 6).map(gb => gb.id) }; g.navalWave.set(k, wave) }
     }
     if (wave) {
@@ -325,7 +325,7 @@ export function manageNavalForces(g: Game, k: number, target: Town | null, home:
     else {
       const rank = (c: Boat) => (c.kind === 'barge' ? 0 : c.kind === 'boat' ? 1 : 2) // (an invasion barge first, then infantry boats, then cargo)
       const prey = g.boats.filter(c => c.hp > 0 && (c.kind === 'cargo' || c.kind === 'barge' || c.kind === 'boat') && g.hostile(k, c.faction) && tiles(c, b) < 45).sort((p, q) => rank(p) - rank(q) || tiles(p, b) - tiles(q, b))[0]
-      const site = !prey ? g.towers.filter(t => !t.built && g.hostile(k, t.faction) && (t.kind === 'boat' || t.kind === 'barge' || t.kind === 'cargo' || t.kind === 'gunship' || t.kind === 'zumwalt') && tiles(t, b) < 45).sort((p, q) => tiles(p, b) - tiles(q, b))[0] : undefined
+      const site = !prey ? g.towers.filter(t => !t.built && g.hostile(k, t.faction) && (t.kind === 'boat' || t.kind === 'barge' || t.kind === 'cargo' || t.kind === 'gunship' || isCapitalKind(t.kind)) && tiles(t, b) < 45).sort((p, q) => tiles(p, b) - tiles(q, b))[0] : undefined
       if (prey) { goal = { x: prey.x, y: prey.y }; setStrikeOn(b, 'boat', prey.id, prey.x, prey.y) }
       else if (site) { goal = { x: site.x, y: site.y }; setStrikeOn(b, 'tower', site.id, site.x, site.y) }
       else if (squadronGoal) { const ang = b.id * 2.4; goal = { x: squadronGoal.x + Math.cos(ang) * 10 * TILE, y: squadronGoal.y + Math.sin(ang) * 10 * TILE }; close = 3 }

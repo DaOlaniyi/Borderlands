@@ -56,7 +56,7 @@ export const buildingUrl = (color: number, name: string) => {
   return imgUrl(set[color])
 }
 /** Ship sprite (bow up) for a kingdom colour. */
-export const shipUrl = (kind: 'boat' | 'zumwalt' | 'cargo' | 'gunship' | 'barge', color: number, dir: 'up' | 'down' | 'left' | 'right' = 'up') => (ui.assets ? imgUrl(ui.assets.ships[kind][color][dir]) : '')
+export const shipUrl = (kind: 'boat' | 'zumwalt' | 'cargo' | 'gunship' | 'barge' | 'battleship', color: number, dir: 'up' | 'down' | 'left' | 'right' = 'up') => (ui.assets ? imgUrl(ui.assets.ships[kind][color][dir]) : '')
 export const tintStyle = (_color: number): { filter?: string } => ({}) // (sprites are recoloured for real now; kept so call sites stay simple)
 
 const emblemCache = new Map<string, string>()

@@ -1,4 +1,4 @@
-import { TILE, YARD } from './config'
+import { TILE, YARD, fleetLimits } from './config'
 import { isSettlement } from './Economy'
 import type { Game } from './Game'
 import type { Town, Yard } from './types'
@@ -73,24 +73,33 @@ export function yardShoreCells(g: Game, q: Yard): number[] {
 }
 
 /**
- * How many ships a kingdom's towns support. Points: 1 per town, +2 per upgraded town (level 2 or barracks), +1 per level 3 settlement; a gunboat
- * uses 1, a Zumwalt 2, and Zumwalts are further capped at one per upgraded town and five per shipyard. Infantry and cargo boats are free.
+ * How many ships a kingdom may keep (see FLEET_TABLE). Limits: Zumwalts and battleships by town count (and at most five Zumwalts per shipyard); gunboats by
+ * town count; every Zumwalt and every battleship also needs a level 2 town (or barracks) of its own: a level 3 settlement does not count. On top of that
+ * the naval points: 1 per town, +2 per upgraded town, +1 per level 3 settlement; a gunboat uses 1, a Zumwalt or battleship 2. Infantry and cargo boats are free.
  */
 export function navalBudget(g: Game, faction: number) {
-  let points = 0, upgraded = 0
+  let points = 0, upgraded = 0, towns = 0
   for (const t of g.towns) {
     if (t.ruined || t.owner !== faction) continue
     if (isSettlement(t)) { if (t.level >= 3) points += YARD.settlementPoints; continue }
+    towns++
     points += YARD.townPoints
     if (isUpgraded(t)) { points += YARD.upgradePoints; upgraded++ }
   }
   const yards = g.yards.filter(q => q.faction === faction).length
-  const zumCap = Math.min(upgraded, yards * YARD.zumwaltsPerYard)
-  let gun = 0, zum = 0
-  for (const b of g.boats) if (b.faction === faction && b.hp > 0) { if (b.kind === 'gunship') gun++; else if (b.kind === 'zumwalt') zum++ }
-  for (const s of g.towers) if (s.faction === faction && !s.built) { if (s.kind === 'gunship') gun++; else if (s.kind === 'zumwalt') zum++ }
-  const used = gun * YARD.gunshipPoints + zum * YARD.zumwaltPoints
-  return { points, used, gun, zum, zumCap, yards, canGunship: used + YARD.gunshipPoints <= points, canZumwalt: zum < zumCap && used + YARD.zumwaltPoints <= points }
+  const lim = fleetLimits(towns)
+  const zumCap = Math.min(lim.zumwalts, yards * YARD.zumwaltsPerYard), bsCap = yards > 0 ? lim.battleships : 0, gunCap = lim.gunboats
+  let gun = 0, zum = 0, bs = 0
+  for (const b of g.boats) if (b.faction === faction && b.hp > 0) { if (b.kind === 'gunship') gun++; else if (b.kind === 'zumwalt') zum++; else if (b.kind === 'battleship') bs++ }
+  for (const s of g.towers) if (s.faction === faction && !s.built) { if (s.kind === 'gunship') gun++; else if (s.kind === 'zumwalt') zum++; else if (s.kind === 'battleship') bs++ }
+  const used = gun * YARD.gunshipPoints + (zum + bs) * YARD.zumwaltPoints
+  const slotFree = zum + bs < upgraded // (each big-gun ship needs a level 2 town)
+  return {
+    points, used, gun, zum, bs, zumCap, bsCap, gunCap, upgraded, towns, yards,
+    canGunship: gun < gunCap && used + YARD.gunshipPoints <= points,
+    canZumwalt: zum < zumCap && slotFree && used + YARD.zumwaltPoints <= points,
+    canBattleship: bs < bsCap && slotFree && used + YARD.zumwaltPoints <= points,
+  }
 }
 
 /** A kingdom has a shipyard on each landmass it holds (more on a big one, see yardQuota). Each stands beside a town: when that town is captured or destroyed, or its ground is taken, the yard is destroyed (never captured) and its owner may build a new one for free. */

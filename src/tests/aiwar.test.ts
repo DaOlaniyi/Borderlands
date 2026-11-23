@@ -5,7 +5,7 @@ import { gunshipsWanted } from '../game/ColonyAI'
 import { unitPower, updateWarGoal } from '../game/AISystem'
 import { meatCap, stockOfTown, deposit } from '../game/Economy'
 import type { Game } from '../game/Game'
-import { makeGame, stepN } from './helpers'
+import { makeGame, stepN, withYards } from './helpers'
 
 const px = (c: number) => (c + 0.5) * TILE
 const land = Array.from({ length: 40 }, () => '#'.repeat(120))
@@ -66,21 +66,22 @@ describe('AI navy: Zumwalts, gunships and invasion sizing', () => {
     g.kingdoms[1].temperament = 'imperialist'; g.kingdoms[1].lumber = 900; g.time = 120
     stepN(g, 25 * 30)
     expect(g.towers.some(t => t.faction === 1 && t.kind === 'zumwalt') || g.boats.some(b => b.faction === 1 && b.kind === 'zumwalt')).toBe(true)
-    const n = makeGame({ rows: sea, towns: [[0, 95, 20], [1, 34, 20], [1, 34, 24], [1, 30, 16], [1, 36, 28]], units: [], pawns: true, ai: true, relation: 'war' })
+    const n = makeGame({ rows: sea, towns: [[0, 95, 20], [1, 34, 20], [1, 34, 24], [1, 30, 16], [1, 36, 28], [1, 28, 22]], units: [], pawns: true, ai: true, relation: 'war' }) // (five towns: the allowance is two Zumwalts)
     quiet(n); for (const t of n.towns) if (t.owner === 1) t.level = 2
     n.kingdoms[1].lumber = 900; n.aiMemo.noSpot[1] = 4; n.aiMemo.tower[1] = 1e9; n.time = 300
     let seen = 0
     for (let i = 0; i < 25 * 600; i++) { n.step(1 / 25); if (n.kingdoms[1].lumber < 400) n.kingdoms[1].lumber = 900; seen = Math.max(seen, n.boats.filter(b => b.faction === 1 && b.kind === 'zumwalt').length) }
     expect(seen).toBeGreaterThanOrEqual(2)
   }, 120000)
-  it('keeps 3 bonded gunships per Zumwalt (up to 12) to protect them, and at least 3 while enemy warships are about', () => {
-    const g = makeGame({ rows: sea, towns: [[0, 95, 20], [1, 34, 20]], units: [], pawns: true, ai: true, relation: 'war' })
-    expect(gunshipsWanted(g, 1)).toBe(0)
-    spawnBoat(g, 1, 'zumwalt', px(41), px(10)); expect(gunshipsWanted(g, 1)).toBe(3)       // a squad: 3 gunships per Zumwalt, rich or poor
-    g.kingdoms[1].lumber = 400; expect(gunshipsWanted(g, 1)).toBe(3)
-    spawnBoat(g, 1, 'zumwalt', px(41), px(14)); spawnBoat(g, 1, 'zumwalt', px(41), px(18)); spawnBoat(g, 1, 'zumwalt', px(41), px(22))
-    expect(gunshipsWanted(g, 1)).toBe(12)
-    g.kingdoms[1].lumber = 0; g.boats.length = 1; g.navalThreat.add(1); expect(gunshipsWanted(g, 1)).toBe(3)
+  it('fills its whole gunboat allowance once it has a big ship to escort (2 per allowed Zumwalt, plus extras), and at least 3 while enemy warships are about', () => {
+    const g = makeGame({ rows: sea, towns: [[0, 95, 20], [1, 34, 20], [1, 34, 24], [1, 30, 16]], units: [], pawns: true, ai: true, relation: 'war' })
+    for (const t of g.towns) if (t.owner === 1) t.level = 2
+    withYards(g, 1)
+    expect(gunshipsWanted(g, 1)).toBe(0)                                                       // nothing to escort yet
+    spawnBoat(g, 1, 'zumwalt', px(41), px(10)); expect(gunshipsWanted(g, 1)).toBe(2)          // three towns: one Zumwalt allowed, so two gunboats
+    spawnBoat(g, 0, 'zumwalt', px(60), px(10)); expect(gunshipsWanted(g, 1)).toBe(3)          // an enemy Zumwalt about: a squad of at least three
+    g.boats = g.boats.filter(b => b.faction !== 0)
+    g.kingdoms[1].lumber = 0; g.boats.length = 0; g.navalThreat.add(1); expect(gunshipsWanted(g, 1)).toBe(3)
   })
   it('an invasion is sized to the defenders (too weak: it builds up first) and goes in as 1-3 FULL barges: 52 troops fill 3 barges', () => {
     const keep = CARE.overcapPct; CARE.overcapPct = 0 // (the test armies are bigger than the test towns' capacity)

@@ -9,7 +9,7 @@ const sea = Array.from({ length: 50 }, (_, y) => (y < 2 || y >= 48 ? '.'.repeat(
 
 /** Kingdom 1 (west, AI, level 2 town, a yard) faces kingdom 2 (east) with `foe` Zumwalts. */
 function race(foe: number, mine = 0) {
-  const g = makeGame({ rows: sea, towns: [[0, 5, 5], [1, 36, 20], [1, 36, 28], [1, 36, 12], [2, 80, 20]], units: [], pawns: true, ai: true, relation: 'war' })
+  const g = makeGame({ rows: sea, towns: [[0, 5, 5], [1, 36, 20], [1, 36, 28], [1, 36, 12], [1, 36, 36], [1, 36, 4], [2, 80, 20]], units: [], pawns: true, ai: true, relation: 'war' }) // (kingdom 1 has five towns: a fleet allowance of two Zumwalts)
   for (const k of g.kingdoms) k.produce = { warrior: false, archer: false, lancer: false, knight: false }
   g.diplomacy.set(0, 1, 'neutral', 0); g.diplomacy.set(0, 2, 'neutral', 0)
   g.kingdoms[1].temperament = 'pacifist'; g.kingdoms[1].lumber = 1000
@@ -41,7 +41,7 @@ describe('zumwalt arms race', () => {
     expect(built()).toBe(before)
   }, 60000)
 
-  it('never builds beyond one more than the enemy has', () => {
+  it('never builds beyond its allowance (five towns: two Zumwalts), however rich', () => {
     const g = race(1, 1)
     g.kingdoms[1].lumber = 3000
     stepN(g, 25 * 120)

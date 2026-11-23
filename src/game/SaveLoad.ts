@@ -8,10 +8,10 @@ import { Recorder, type RecData } from './Recorder'
  * replacer/reviver for the non-JSON types.
  */
 export const SAVE_VERSION = 1
-export type SaveParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number; dynamic?: boolean }
+export type SaveParams = { seed: string; color: number; kingdoms?: number; playerTowns?: number; lumber?: number; dynamic?: boolean; playAs?: number }
 
 /** Game fields that are derived (rebuilt on load) or hold functions / generators. */
-const SKIP = new Set(['world', 'info', 'unitHash', 'unitMap', 'ux', 'uy', 'rng', 'rngE', 'sounds', 'fx', 'projectiles', 'simMs', 'territoryMs', 'rec'])
+const SKIP = new Set(['world', 'info', 'unitHash', 'unitMap', 'ux', 'uy', 'rng', 'rngE', 'sounds', 'fx', 'projectiles', 'simMs', 'territoryMs', 'rec', 'flames', 'burnHeat'])
 
 const toB64 = (a: ArrayBufferView) => {
   const u = new Uint8Array(a.buffer, a.byteOffset, a.byteLength)
@@ -85,7 +85,7 @@ export function applySave(g: Game, json: string) {
 export function restoreGame(params: SaveParams, json: string, recording?: string): Game {
   const data = JSON.parse(json, reviver) as { v: number; rng: number; rngE: number; trees: number[][]; fields: Record<string, unknown> }
   if (data.v !== SAVE_VERSION) throw new Error(`This save was made by a different version of the game (v${data.v}).`)
-  const g = Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, startLumber: params.lumber, dynamic: params.dynamic })
+  const g = Game.fromSeed(params.seed, params.kingdoms ?? 0, params.playerTowns, { archipelago: true, playerColor: params.color, startLumber: params.lumber, dynamic: params.dynamic, playAs: params.playAs })
   const target = g as unknown as Record<string, unknown>
   for (const [key, val] of Object.entries(data.fields)) {
     if (key === 'diplomacy') Object.assign(g.diplomacy, val)
