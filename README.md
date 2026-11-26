@@ -1,5 +1,7 @@
 # Borderlands Online — Territory Prototype
 
+**Version 0.1.5** — Battleships, new navy limits/ratios, ship surge system
+
 A browser strategy prototype built around a tile-based territory system: units walk freely in continuous space, but ownership, supply and borders are evaluated on a logical 64 × 64 grid. React handles the menu and HUD; the world is drawn with Canvas 2D using the Tiny Swords art pack.
 
 ## Run
